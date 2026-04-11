@@ -80,7 +80,7 @@ export function LogExplorer() {
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      const logs = parseLogs(text);
+      const logs = parseLogs(text).sort((a, b) => a.payloadTs - b.payloadTs);
       setAllLogs(logs);
       setFilters({ search: '', severity: 'ALL', service: '', corrId: '' });
       setLoading(false);

@@ -65,9 +65,11 @@ export function parseLog(row: string[], id: number): LogEntry {
   }
 
   const severity = normSeverity(payload.severity);
+  const payloadTs = payload.timestamp ? Date.parse(payload.timestamp) : 0;
   return {
     id,
     ts: ts.trim(),
+    payloadTs,
     container: container.trim(),
     payload,
     severity,

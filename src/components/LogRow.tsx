@@ -32,6 +32,10 @@ function httpStatusColor(status?: number): string {
 }
 
 function formatTimestamp(ts: string): string {
+  // Handles ISO format: "2026-04-11T17:30:51.442015616+07:00"
+  const iso = ts.match(/T(\d{2}:\d{2}:\d{2})\.(\d{3})/);
+  if (iso) return `${iso[1]}.${iso[2]}`;
+  // Fallback for CSV timestamp format
   const m = ts.match(/(\d{2}:\d{2}:\d{2}[\.,]\d+)/);
   return m ? m[1] : ts;
 }
@@ -57,8 +61,7 @@ export function LogRow({ log, onFilterCorrId }: Props) {
   const badge = SEVERITY_BADGE[log.severity] || SEVERITY_BADGE.DEBUG;
   const leftBorder = SEVERITY_LEFT_BORDER[log.severity] || '';
 
-  // Build summary message: prefer error string for ERROR rows
-  const summaryMsg = log.severity === 'ERROR' && log.error ? log.error : log.message;
+  const summaryMsg = log.message;
 
   // HTTP info snippet
   let httpSnippet: React.ReactNode = null;
@@ -104,7 +107,7 @@ export function LogRow({ log, onFilterCorrId }: Props) {
           {log.severity}
         </span>
         <span className="text-slate-500 shrink-0 text-[11px]">
-          {formatTimestamp(log.ts)}
+          {formatTimestamp(log.payload.timestamp ?? log.ts)}
         </span>
         <span className="text-green-400 shrink-0 max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap text-[11px]"
           title={log.container}>
