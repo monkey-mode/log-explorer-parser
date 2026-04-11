@@ -60,6 +60,6 @@ export interface LogEntry {
 export interface FilterState {
   search: string;
   severity: string;
-  service: string;
+  services: string[];
   corrId: string;
 }

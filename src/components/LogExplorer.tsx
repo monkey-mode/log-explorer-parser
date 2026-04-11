@@ -5,6 +5,101 @@ import type { LogEntry, FilterState } from '@/lib/logTypes';
 import { parseLogs } from '@/lib/csvParser';
 import { LogRow } from './LogRow';
 
+// ── Multi-select service dropdown ──────────────────────────────────────────
+interface ServicePickerProps {
+  services: string[];
+  selected: string[];
+  onChange: (selected: string[]) => void;
+}
+
+function ServicePicker({ services, selected, onChange }: ServicePickerProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const toggle = (svc: string) => {
+    onChange(selected.includes(svc) ? selected.filter((s) => s !== svc) : [...selected, svc]);
+  };
+
+  const label =
+    selected.length === 0 ? 'All Services' :
+    selected.length === 1 ? selected[0] :
+    `${selected.length} Services`;
+
+  if (services.length === 0) return null;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs border transition-colors ${
+          selected.length > 0
+            ? 'bg-blue-950 border-blue-700 text-blue-300'
+            : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500'
+        }`}
+      >
+        <span className="max-w-[160px] truncate">{label}</span>
+        {selected.length > 0 && (
+          <span
+            className="text-blue-400 hover:text-white font-bold leading-none ml-0.5"
+            onClick={(e) => { e.stopPropagation(); onChange([]); }}
+            title="Clear"
+          >
+            ×
+          </span>
+        )}
+        <svg className={`w-3 h-3 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-40 bg-slate-800 border border-slate-700 rounded-md shadow-xl min-w-[220px] max-h-72 overflow-y-auto">
+          {/* Select all / clear */}
+          <div className="flex gap-2 px-3 py-2 border-b border-slate-700">
+            <button
+              onClick={() => onChange([...services])}
+              className="text-[11px] text-blue-400 hover:text-blue-300"
+            >
+              Select all
+            </button>
+            <span className="text-slate-600">·</span>
+            <button
+              onClick={() => onChange([])}
+              className="text-[11px] text-slate-400 hover:text-slate-200"
+            >
+              Clear
+            </button>
+          </div>
+          {services.map((svc) => (
+            <label
+              key={svc}
+              className="flex items-center gap-2.5 px-3 py-1.5 hover:bg-slate-700 cursor-pointer text-xs text-slate-300"
+            >
+              <input
+                type="checkbox"
+                checked={selected.includes(svc)}
+                onChange={() => toggle(svc)}
+                className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
+              />
+              <span className="truncate">{svc}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const SEV_BUTTONS = ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'] as const;
 
 const SEV_BTN_ACTIVE: Record<string, string> = {
@@ -22,7 +117,7 @@ export function LogExplorer() {
   const [filters, setFilters] = useState<FilterState>({
     search: '',
     severity: 'ALL',
-    service: '',
+    services: [],
     corrId: '',
   });
 
@@ -49,7 +144,7 @@ export function LogExplorer() {
     const q = filters.search.toLowerCase().trim();
     return allLogs.filter((log) => {
       if (filters.severity !== 'ALL' && log.severity !== filters.severity) return false;
-      if (filters.service && log.container !== filters.service) return false;
+      if (filters.services.length > 0 && !filters.services.includes(log.container)) return false;
       if (filters.corrId && log.corrId !== filters.corrId) return false;
       if (q) {
         const haystack = [
@@ -82,7 +177,7 @@ export function LogExplorer() {
       const text = e.target?.result as string;
       const logs = parseLogs(text).sort((a, b) => a.payloadTs - b.payloadTs);
       setAllLogs(logs);
-      setFilters({ search: '', severity: 'ALL', service: '', corrId: '' });
+      setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
       setLoading(false);
     };
     reader.readAsText(file);
@@ -138,9 +233,9 @@ export function LogExplorer() {
     return () => document.removeEventListener('keydown', handler);
   }, []);
 
-  const setSearch   = (v: string) => setFilters((f) => ({ ...f, search: v }));
-  const setSeverity = (v: string) => setFilters((f) => ({ ...f, severity: v }));
-  const setService  = (v: string) => setFilters((f) => ({ ...f, service: v }));
+  const setSearch      = (v: string)   => setFilters((f) => ({ ...f, search: v }));
+  const setSeverity    = (v: string)   => setFilters((f) => ({ ...f, severity: v }));
+  const setServices    = (v: string[]) => setFilters((f) => ({ ...f, services: v }));
   const filterByCorrId = useCallback((corrId: string) => setFilters((f) => ({ ...f, corrId })), []);
   const clearCorrId    = useCallback(() => setFilters((f) => ({ ...f, corrId: '' })), []);
 
@@ -226,19 +321,12 @@ export function LogExplorer() {
           ))}
         </div>
 
-        {/* Service filter */}
-        {services.length > 0 && (
-          <select
-            value={filters.service}
-            onChange={(e) => setService(e.target.value)}
-            className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-300 outline-none focus:border-blue-500 max-w-[200px]"
-          >
-            <option value="">All Services</option>
-            {services.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-        )}
+        {/* Service multi-select */}
+        <ServicePicker
+          services={services}
+          selected={filters.services}
+          onChange={setServices}
+        />
 
         {/* Corr-ID chip */}
         {filters.corrId && (
