@@ -1,0 +1,300 @@
+'use client';
+
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import type { LogEntry, FilterState } from '@/lib/logTypes';
+import { parseLogs } from '@/lib/csvParser';
+import { LogRow } from './LogRow';
+
+const SEV_BUTTONS = ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'] as const;
+
+const SEV_BTN_ACTIVE: Record<string, string> = {
+  ALL:   'bg-blue-600 text-white border-blue-600',
+  ERROR: 'bg-red-700 text-white border-red-700',
+  WARN:  'bg-yellow-600 text-black border-yellow-600',
+  INFO:  'bg-blue-600 text-white border-blue-600',
+  DEBUG: 'bg-slate-600 text-white border-slate-600',
+};
+
+export function LogExplorer() {
+  const [allLogs, setAllLogs] = useState<LogEntry[]>([]);
+  const [fileName, setFileName] = useState<string>('');
+  const [loading, setLoading] = useState(false);
+  const [filters, setFilters] = useState<FilterState>({
+    search: '',
+    severity: 'ALL',
+    service: '',
+    corrId: '',
+  });
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const dropOverlayRef = useRef<HTMLDivElement>(null);
+
+  // Derived services list
+  const services = useMemo(
+    () => [...new Set(allLogs.map((l) => l.container))].sort(),
+    [allLogs]
+  );
+
+  // Stats
+  const stats = useMemo(() => {
+    if (!allLogs.length) return null;
+    const errors = allLogs.filter((l) => l.severity === 'ERROR').length;
+    const warns  = allLogs.filter((l) => l.severity === 'WARN').length;
+    return { total: allLogs.length, errors, warns };
+  }, [allLogs]);
+
+  // Filtered logs
+  const filteredLogs = useMemo(() => {
+    const q = filters.search.toLowerCase().trim();
+    return allLogs.filter((log) => {
+      if (filters.severity !== 'ALL' && log.severity !== filters.severity) return false;
+      if (filters.service && log.container !== filters.service) return false;
+      if (filters.corrId && log.corrId !== filters.corrId) return false;
+      if (q) {
+        const haystack = [
+          log.message,
+          log.error,
+          log.container,
+          log.corrId,
+          log.callUrl ?? '',
+          log.httpReq?.requestUrl ?? '',
+          log.httpReq?.requestMethod ?? '',
+          log.payload.caller ?? '',
+          String(log.httpSC ?? ''),
+          String(log.httpReq?.status ?? ''),
+          JSON.stringify(log.payload),
+        ]
+          .join(' ')
+          .toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allLogs, filters]);
+
+  // Load CSV
+  const loadFile = useCallback((file: File) => {
+    setFileName(file.name);
+    setLoading(true);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result as string;
+      const logs = parseLogs(text);
+      setAllLogs(logs);
+      setFilters({ search: '', severity: 'ALL', service: '', corrId: '' });
+      setLoading(false);
+    };
+    reader.readAsText(file);
+  }, []);
+
+  // File input change
+  const onFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) loadFile(file);
+    },
+    [loadFile]
+  );
+
+  // Drag & drop
+  useEffect(() => {
+    const overlay = dropOverlayRef.current;
+    if (!overlay) return;
+
+    const show = (e: DragEvent) => { e.preventDefault(); overlay.classList.add('flex'); overlay.classList.remove('hidden'); };
+    const hide = (e: DragEvent) => { if (!e.relatedTarget) { overlay.classList.remove('flex'); overlay.classList.add('hidden'); } };
+    const drop = (e: DragEvent) => {
+      e.preventDefault();
+      overlay.classList.remove('flex'); overlay.classList.add('hidden');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) loadFile(file);
+    };
+
+    document.addEventListener('dragenter', show);
+    document.addEventListener('dragleave', hide);
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', drop);
+    return () => {
+      document.removeEventListener('dragenter', show);
+      document.removeEventListener('dragleave', hide);
+      document.removeEventListener('drop', drop);
+    };
+  }, [loadFile]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setFilters((f) => ({ ...f, corrId: '' }));
+        return;
+      }
+      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
+
+  const setSearch   = (v: string) => setFilters((f) => ({ ...f, search: v }));
+  const setSeverity = (v: string) => setFilters((f) => ({ ...f, severity: v }));
+  const setService  = (v: string) => setFilters((f) => ({ ...f, service: v }));
+  const filterByCorrId = useCallback((corrId: string) => setFilters((f) => ({ ...f, corrId })), []);
+  const clearCorrId    = useCallback(() => setFilters((f) => ({ ...f, corrId: '' })), []);
+
+  return (
+    <div className="flex flex-col h-screen bg-slate-950 text-slate-300 overflow-hidden">
+      {/* Drop overlay */}
+      <div
+        ref={dropOverlayRef}
+        className="hidden fixed inset-0 z-50 items-center justify-center bg-blue-900/20 border-4 border-dashed border-blue-500 text-blue-300 text-xl font-semibold pointer-events-none"
+      >
+        📂 Drop CSV file here
+      </div>
+
+      {/* ── Header ── */}
+      <header className="flex items-center gap-3 px-4 py-2.5 bg-slate-900 border-b border-slate-800 shrink-0">
+        <div className="flex items-center gap-2">
+          <svg className="w-5 h-5 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" y1="13" x2="8" y2="13"/>
+            <line x1="16" y1="17" x2="8" y2="17"/>
+            <polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <span className="font-bold text-white text-[15px] tracking-tight">Log Explorer</span>
+        </div>
+
+        <label className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-md cursor-pointer transition-colors">
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Load CSV
+          <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFileChange} />
+        </label>
+
+        {fileName && (
+          <span className="text-xs text-slate-500 truncate max-w-[200px]">{fileName}</span>
+        )}
+
+        {stats && (
+          <div className="ml-auto flex items-center gap-3 text-xs text-slate-500">
+            <span>{stats.total.toLocaleString()} entries</span>
+            {stats.errors > 0 && <span className="text-red-400">{stats.errors} errors</span>}
+            {stats.warns  > 0 && <span className="text-yellow-400">{stats.warns} warnings</span>}
+          </div>
+        )}
+
+        {loading && <span className="text-xs text-slate-500 ml-2 animate-pulse">Parsing…</span>}
+      </header>
+
+      {/* ── Filters ── */}
+      <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-800 shrink-0 flex-wrap">
+        {/* Search */}
+        <div className="relative flex-1 min-w-[200px]">
+          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input
+            ref={searchRef}
+            type="text"
+            value={filters.search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search message, error, URL, correlation ID… (press / to focus)"
+            className="w-full pl-8 pr-3 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-200 placeholder-slate-500 outline-none focus:border-blue-500 transition-colors"
+          />
+        </div>
+
+        {/* Severity */}
+        <div className="flex gap-1">
+          {SEV_BUTTONS.map((sev) => (
+            <button
+              key={sev}
+              onClick={() => setSeverity(sev)}
+              className={`px-2.5 py-1 text-[11px] font-bold rounded border transition-all ${
+                filters.severity === sev
+                  ? SEV_BTN_ACTIVE[sev]
+                  : 'border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-500'
+              }`}
+            >
+              {sev}
+            </button>
+          ))}
+        </div>
+
+        {/* Service filter */}
+        {services.length > 0 && (
+          <select
+            value={filters.service}
+            onChange={(e) => setService(e.target.value)}
+            className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-300 outline-none focus:border-blue-500 max-w-[200px]"
+          >
+            <option value="">All Services</option>
+            {services.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        )}
+
+        {/* Corr-ID chip */}
+        {filters.corrId && (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-950 border border-blue-700 rounded-full text-[11px] text-blue-300">
+            <span className="text-blue-500 font-medium">corr-id:</span>
+            <span className="font-mono">{filters.corrId.substring(0, 16)}…</span>
+            <button
+              onClick={clearCorrId}
+              className="text-blue-400 hover:text-white font-bold leading-none ml-0.5"
+              title="Clear filter (Esc)"
+            >
+              ×
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── Count bar ── */}
+      <div className="px-4 py-1 bg-slate-900/80 border-b border-slate-800 text-[11px] text-slate-500 shrink-0">
+        {allLogs.length > 0
+          ? `Showing ${filteredLogs.length.toLocaleString()} of ${allLogs.length.toLocaleString()} entries`
+          : 'No file loaded'}
+      </div>
+
+      {/* ── Log list ── */}
+      <main className="flex-1 overflow-y-auto">
+        {allLogs.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-slate-500">
+            <svg className="w-16 h-16 text-slate-700" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+            <div className="text-center">
+              <p className="text-slate-300 font-medium mb-1">Load a CSV to start exploring logs</p>
+              <p className="text-sm text-slate-500 max-w-sm">
+                Export from OpenSearch with{' '}
+                <code className="text-slate-400">@timestamp</code>,{' '}
+                <code className="text-slate-400">kubernetes.container_name</code>,{' '}
+                <code className="text-slate-400">json_payload</code> columns.
+                <br />You can also drag & drop the file.
+              </p>
+            </div>
+          </div>
+        ) : filteredLogs.length === 0 ? (
+          <div className="flex items-center justify-center h-32 text-slate-500 text-sm">
+            No logs match the current filters.
+          </div>
+        ) : (
+          filteredLogs.map((log) => (
+            <LogRow key={log.id} log={log} onFilterCorrId={filterByCorrId} />
+          ))
+        )}
+      </main>
+    </div>
+  );
+}
