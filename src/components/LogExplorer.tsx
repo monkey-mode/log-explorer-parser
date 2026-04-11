@@ -63,7 +63,7 @@ function ServicePicker({ services, selected, onChange }: ServicePickerProps) {
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 z-40 bg-slate-800 border border-slate-700 rounded-md shadow-xl min-w-[220px] max-h-72 overflow-y-auto">
+        <div className="absolute top-full right-0 mt-1 z-40 bg-slate-800 border border-slate-700 rounded-md shadow-xl min-w-[220px] max-h-72 overflow-y-auto">
           {/* Select all / clear */}
           <div className="flex gap-2 px-3 py-2 border-b border-slate-700">
             <button
