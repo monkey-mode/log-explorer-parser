@@ -1,36 +1,68 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Log Explorer
+
+A GCP Logs Explorer-style viewer for OpenSearch CSV exports. Built to make it easy to investigate logs when your DevOps team migrates GCP structured logs into OpenSearch and exports them with `json_payload` grouped into a single CSV column.
+
+## The Problem
+
+OpenSearch exports logs as CSV with this structure:
+
+| `@timestamp` | `kubernetes.container_name` | `json_payload` |
+|---|---|---|
+| Apr 11, 2026 @ 17:30:51 | orch-payment-transaction | `{ "message": "...", "severity": "ERROR", ... }` |
+
+The `json_payload` column is a multiline JSON blob — impossible to read in a spreadsheet and hard to filter in a text editor.
+
+## Features
+
+- **Severity filter** — quickly isolate ERROR / WARN / INFO / DEBUG entries
+- **Full-text search** — searches across message, error, URL, caller, correlation ID, and the entire JSON payload
+- **Service filter** — filter to a specific `kubernetes.container_name`
+- **Correlation ID trace** — click any log row's "Filter by Corr-ID" button to show all logs in the same request trace
+- **Inline JSON tree** — click any row to expand a collapsible JSON tree viewer; nested JSON strings (e.g. `http_response_body`) are auto-parsed and rendered as trees
+- **Stack trace panel** — ERROR logs with a `stacktrace` field get a dedicated highlighted block
+- **HTTP summary** — request logs show `METHOD /path [status] latency` in the row summary
+- **Copy buttons** — copy Correlation ID or the full JSON payload with one click
+- **Drag & drop** — drop a CSV file anywhere on the page to load it
+- **Keyboard shortcuts** — `/` to focus search, `Esc` to clear Correlation ID filter
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000), then load your OpenSearch CSV export via the **Load CSV** button or drag & drop.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## CSV Format
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Export from OpenSearch with these columns (in this order):
 
-## Learn More
+```
+@timestamp, kubernetes.container_name, json_payload
+```
 
-To learn more about Next.js, take a look at the following resources:
+The parser handles multiline `json_payload` fields correctly — no pre-processing needed.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Project Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+src/
+├── app/
+│   ├── page.tsx          # Entry point
+│   ├── layout.tsx
+│   └── globals.css
+├── components/
+│   ├── LogExplorer.tsx   # Main shell: state, filters, file loading
+│   ├── LogRow.tsx        # Individual log row + expandable detail panel
+│   └── JsonViewer.tsx    # Recursive collapsible JSON tree renderer
+└── lib/
+    ├── csvParser.ts      # RFC 4180 CSV parser + log entry parser
+    └── logTypes.ts       # TypeScript types
+```
 
-## Deploy on Vercel
+## Tech Stack
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js 16](https://nextjs.org) (App Router)
+- [Tailwind CSS v4](https://tailwindcss.com)
+- TypeScript
