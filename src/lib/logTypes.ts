@@ -32,6 +32,8 @@ export interface LogPayload {
   response_body?: string;
   request_datetime?: string;
   response_datetime?: string;
+  value?: string;        // stream log: JSON string containing correlationId
+  _source?: string;      // internal: 'text_payload' when json_payload was "-"
   serviceContext?: { service?: string };
   context?: unknown;
   'logging.googleapis.com/sourceLocation'?: {

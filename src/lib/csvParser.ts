@@ -56,12 +56,34 @@ function normSeverity(s?: string): Severity {
 }
 
 export function parseLog(row: string[], id: number): LogEntry {
-  const [ts = '', container = '', jsonStr = ''] = row;
+  const [ts = '', container = '', jsonStr = '', textPayload = ''] = row;
+
+  // When json_payload is "-" or blank, fall back to text_payload
+  const isJsonEmpty = jsonStr.trim() === '-' || jsonStr.trim() === '';
   let payload: LogPayload = {};
-  try {
-    payload = JSON.parse(jsonStr) as LogPayload;
-  } catch {
-    payload = { message: jsonStr, severity: 'DEBUG' };
+
+  if (isJsonEmpty) {
+    payload = {
+      message: textPayload.trim() || '(empty)',
+      severity: 'INFO',
+      _source: 'text_payload',
+    };
+  } else {
+    try {
+      payload = JSON.parse(jsonStr) as LogPayload;
+    } catch {
+      payload = { message: jsonStr, severity: 'DEBUG' };
+    }
+  }
+
+  // Extract correlationId from stream logs ("message claimed"):
+  // these services have no X-Correlation-ID header — it lives inside payload.value (a JSON string)
+  let corrId = payload['X-Correlation-ID'] || '';
+  if (!corrId && payload.value && typeof payload.value === 'string') {
+    try {
+      const val = JSON.parse(payload.value) as Record<string, unknown>;
+      if (typeof val.correlationId === 'string') corrId = val.correlationId;
+    } catch { /* not JSON */ }
   }
 
   const severity = normSeverity(payload.severity);
@@ -74,7 +96,7 @@ export function parseLog(row: string[], id: number): LogEntry {
     payload,
     severity,
     message: payload.message || payload.error || '(no message)',
-    corrId: payload['X-Correlation-ID'] || '',
+    corrId,
     error: payload.error || '',
     httpReq: payload.httpRequest,
     callUrl: payload.call_to_url || payload.call_to_api || undefined,
