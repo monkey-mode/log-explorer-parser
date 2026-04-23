@@ -53,6 +53,7 @@ export interface LogEntry {
   severity: Severity;
   message: string;
   corrId: string;
+  requestId: string;
   error: string;
   httpReq?: HttpRequest;
   callUrl?: string;

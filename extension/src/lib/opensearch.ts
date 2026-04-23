@@ -4,9 +4,11 @@ export interface OSConfig {
   indexPattern: string;
   timeRange: string;
   size: number;
+  corrId?: string;
+  requestId?: string;
 }
 
-export const DEFAULT_CONFIG: Partial<OSConfig> = {
+export const DEFAULT_CONFIG: OSConfig = {
   indexPattern: 'logs-*',
   timeRange: 'now-15m',
   size: 500,
@@ -98,6 +100,8 @@ function parseOSHit(hit: OSHit, id: number): LogEntry {
     ? Date.parse(payload.timestamp as string)
     : Date.parse(ts);
 
+  const requestId = (payload['X-Request-ID'] as string) || (payload['x-request-id'] as string) || '';
+
   return {
     id,
     ts,
@@ -105,12 +109,13 @@ function parseOSHit(hit: OSHit, id: number): LogEntry {
     container,
     payload,
     severity,
-    message: (payload.message as string) || (payload.error as string) || '(no message)',
+    message:   (payload.message as string)   || (payload.error as string) || '(no message)',
     corrId,
-    error:   (payload.error as string) || '',
-    httpReq:  payload.httpRequest,
-    callUrl:  (payload.call_to_url as string) || (payload.call_to_api as string) || undefined,
-    httpSC:   payload.http_status_code as number | undefined,
+    requestId,
+    error:     (payload.error as string)     || '',
+    httpReq:   payload.httpRequest,
+    callUrl:   (payload.call_to_url as string) || (payload.call_to_api as string) || undefined,
+    httpSC:    payload.http_status_code as number | undefined,
   };
 }
 
@@ -124,6 +129,66 @@ export async function getActiveTab(): Promise<chrome.tabs.Tab> {
     });
   });
 }
+
+// ── Page data capture ──────────────────────────────────────────────────────
+
+/**
+ * Inject a fetch interceptor into the page's main JS world.
+ * Captures every OpenSearch Dashboards search response into window.__logExplorerData.
+ * Idempotent — safe to call multiple times.
+ */
+export async function injectPageHook(tabId: number): Promise<void> {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN' as chrome.scripting.ExecutionWorld,
+      func: () => {
+        if ((window as any).__logExplorerHooked) return;
+        (window as any).__logExplorerHooked = true;
+        (window as any).__logExplorerData = (window as any).__logExplorerData ?? null;
+
+        const orig = window.fetch.bind(window);
+        window.fetch = async function (...args: Parameters<typeof fetch>) {
+          const resp = await orig(...args);
+          const url = args[0] instanceof Request ? args[0].url
+            : args[0] instanceof URL ? args[0].href
+            : String(args[0]);
+          if (url.includes('/internal/search/opensearch-with-long-numerals')) {
+            resp.clone().json().then((d: unknown) => {
+              const hits = (d as any)?.rawResponse?.hits?.hits;
+              if (Array.isArray(hits) && hits.length > 0) {
+                (window as any).__logExplorerData = d;
+              }
+            }).catch(() => {});
+          }
+          return resp;
+        };
+      },
+    });
+  } catch { /* tab may not allow scripting (e.g. chrome:// pages) */ }
+}
+
+/** Read whatever OpenSearch data the page has captured so far. */
+export async function readPageData(tabId: number): Promise<LogEntry[] | null> {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: 'MAIN' as chrome.scripting.ExecutionWorld,
+      func: (): unknown => (window as any).__logExplorerData ?? null,
+    });
+
+    const data = results[0]?.result as DashboardsSearchResponse | null;
+    if (!data?.rawResponse?.hits?.hits?.length) return null;
+
+    return (data.rawResponse.hits.hits as OSHit[])
+      .map((hit, i) => parseOSHit(hit, i))
+      .sort((a, b) => a.payloadTs - b.payloadTs);
+  } catch {
+    return null;
+  }
+}
+
+// ── Direct API fetch (fallback / Test Connection) ──────────────────────────
 
 interface FetchResult { ok: boolean; data?: unknown; error?: string }
 
@@ -162,6 +227,34 @@ export async function queryOpenSearch(config: OSConfig): Promise<LogEntry[]> {
   const tab = await getActiveTab();
   if (!tab.id) throw new Error('Cannot communicate with the active tab.');
 
+  const filters: object[] = [
+    { range: { '@timestamp': { gte: config.timeRange, lte: 'now' } } },
+  ];
+
+  if (config.corrId?.trim()) {
+    filters.push({
+      bool: {
+        should: [
+          { term: { 'json_payload.X-Correlation-ID': config.corrId.trim() } },
+          { term: { 'json_payload.x-correlation-id': config.corrId.trim() } },
+        ],
+        minimum_should_match: 1,
+      },
+    });
+  }
+
+  if (config.requestId?.trim()) {
+    filters.push({
+      bool: {
+        should: [
+          { term: { 'json_payload.X-Request-ID': config.requestId.trim() } },
+          { term: { 'json_payload.x-request-id': config.requestId.trim() } },
+        ],
+        minimum_should_match: 1,
+      },
+    });
+  }
+
   const body = {
     size: config.size,
     version: true,
@@ -171,10 +264,7 @@ export async function queryOpenSearch(config: OSConfig): Promise<LogEntry[]> {
     query: {
       bool: {
         must: [],
-        filter: [
-          { match_all: {} },
-          { range: { '@timestamp': { gte: config.timeRange, lte: 'now' } } },
-        ],
+        filter: filters,
         should: [],
         must_not: [],
       },

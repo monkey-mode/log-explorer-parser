@@ -86,6 +86,7 @@ export function parseLog(row: string[], id: number): LogEntry {
     } catch { /* not JSON */ }
   }
 
+  const requestId = (payload['X-Request-ID'] as string) || '';
   const severity = normSeverity(payload.severity);
   const payloadTs = payload.timestamp ? Date.parse(payload.timestamp) : 0;
   return {
@@ -97,6 +98,7 @@ export function parseLog(row: string[], id: number): LogEntry {
     severity,
     message: payload.message || payload.error || '(no message)',
     corrId,
+    requestId,
     error: payload.error || '',
     httpReq: payload.httpRequest,
     callUrl: payload.call_to_url || payload.call_to_api || undefined,
