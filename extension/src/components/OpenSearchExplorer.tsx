@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { LogEntry, FilterState } from '@/lib/logTypes';
-import { parseLog } from '@/lib/csvParser';
 import { LogRow } from '@/components/LogRow';
 import type { OSConfig } from '../lib/opensearch';
 import { queryOpenSearch, TIME_RANGES } from '../lib/opensearch';
@@ -140,11 +139,7 @@ export function OpenSearchExplorer({ config, onOpenSettings }: Props) {
     setLoading(true);
     setFetchError('');
     try {
-      const rows = await queryOpenSearch({ ...config, timeRange: range });
-      const logs = rows
-        .filter((r) => r.length >= 3)
-        .map((r, i) => parseLog(r, i))
-        .sort((a, b) => a.payloadTs - b.payloadTs);
+      const logs = await queryOpenSearch({ ...config, timeRange: range });
       setAllLogs(logs);
       setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
     } catch (e) {
@@ -299,7 +294,7 @@ export function OpenSearchExplorer({ config, onOpenSettings }: Props) {
       <main className="flex-1 overflow-y-auto">
         {loading && allLogs.length === 0 ? (
           <div className="flex items-center justify-center h-32 text-slate-500 text-xs animate-pulse">
-            Querying {config.baseUrl}…
+            Querying {config.indexPattern}…
           </div>
         ) : filteredLogs.length === 0 && !loading ? (
           <div className="flex items-center justify-center h-32 text-slate-500 text-xs">

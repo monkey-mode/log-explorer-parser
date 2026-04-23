@@ -32,6 +32,7 @@ export default defineConfig({
       input: {
         sidepanel:  resolve(__dirname, 'src/sidepanel.html'),
         background: resolve(__dirname, 'src/background.ts'),
+        content:    resolve(__dirname, 'src/content.ts'),
       },
       output: {
         // Stable filenames so manifest.json references are always valid

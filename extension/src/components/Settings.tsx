@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import type { OSConfig } from '../lib/opensearch';
-import { saveConfig, testConnection, DEFAULT_CONFIG } from '../lib/opensearch';
+import { saveConfig, testConnection, getActiveTab, DEFAULT_CONFIG } from '../lib/opensearch';
 
 interface Props {
   initial: Partial<OSConfig>;
@@ -9,15 +9,22 @@ interface Props {
 
 export function Settings({ initial, onSaved }: Props) {
   const [form, setForm] = useState<Partial<OSConfig>>({ ...DEFAULT_CONFIG, ...initial });
+  const [tabOrigin, setTabOrigin] = useState('');
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Detect the current active tab's origin to show the user which OpenSearch instance will be used
+  useEffect(() => {
+    getActiveTab()
+      .then((tab) => setTabOrigin(tab.url ? new URL(tab.url).origin : ''))
+      .catch(() => setTabOrigin(''));
+  }, []);
 
   const set = (k: keyof OSConfig, v: string | number) =>
     setForm((f) => ({ ...f, [k]: v }));
 
   const validate = () => {
-    if (!form.baseUrl?.trim()) return 'Base URL is required.';
     if (!form.indexPattern?.trim()) return 'Index pattern is required.';
     return null;
   };
@@ -31,7 +38,7 @@ export function Settings({ initial, onSaved }: Props) {
       const count = await testConnection(form as OSConfig);
       setStatus({ ok: true, msg: `✓ Connected — ${count.toLocaleString()} documents in index` });
     } catch (e) {
-      setStatus({ ok: false, msg: `Connection failed: ${(e as Error).message}` });
+      setStatus({ ok: false, msg: `Failed: ${(e as Error).message}` });
     } finally {
       setTesting(false);
     }
@@ -46,55 +53,45 @@ export function Settings({ initial, onSaved }: Props) {
     onSaved(form as OSConfig);
   };
 
-  const Field = ({
-    label, field, type = 'text', placeholder,
-  }: { label: string; field: keyof OSConfig; type?: string; placeholder?: string }) => (
-    <div>
-      <label className="block text-[11px] text-slate-400 mb-1">{label}</label>
-      <input
-        type={type}
-        value={(form[field] as string) ?? ''}
-        onChange={(e) => set(field, e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-200 outline-none focus:border-blue-500 transition-colors placeholder-slate-500"
-        autoComplete="off"
-      />
-    </div>
-  );
-
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-slate-300 overflow-auto">
-      {/* Header */}
       <header className="flex items-center gap-2 px-4 py-3 bg-slate-900 border-b border-slate-800 shrink-0">
         <svg className="w-5 h-5 text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
           <polyline points="14 2 14 8 20 8"/>
         </svg>
         <span className="font-bold text-white text-[15px]">Log Explorer</span>
-        <span className="ml-1 text-xs text-slate-500">— Setup</span>
+        <span className="text-xs text-slate-500">— Setup</span>
       </header>
 
       <div className="p-4 flex flex-col gap-4">
-        <p className="text-xs text-slate-500 leading-relaxed">
-          Connect to your OpenSearch instance. The extension queries directly — no export needed.
-        </p>
+        {/* How it works */}
+        <div className="bg-blue-950/40 border border-blue-800/50 rounded-md px-3 py-2.5 text-xs text-blue-300 leading-relaxed">
+          <strong className="text-blue-200">No login required.</strong> The extension queries OpenSearch through the active
+          tab's existing session. Make sure you are on the OpenSearch Dashboards page before fetching logs.
+        </div>
 
-        <Field
-          label="OpenSearch Base URL *"
-          field="baseUrl"
-          type="url"
-          placeholder="https://opensearch.internal.example.com"
-        />
+        {/* Detected tab */}
+        {tabOrigin && (
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <svg className="w-3.5 h-3.5 text-green-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            <span>Active tab: <span className="text-slate-200 font-mono">{tabOrigin}</span></span>
+          </div>
+        )}
 
-        <Field
-          label="Index Pattern *"
-          field="indexPattern"
-          placeholder="logs-mfoa-uat-gke-1-uat*"
-        />
-
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Username (optional)" field="username" placeholder="admin" />
-          <Field label="Password (optional)" field="password" type="password" placeholder="••••••" />
+        {/* Index pattern */}
+        <div>
+          <label className="block text-[11px] text-slate-400 mb-1">Index Pattern *</label>
+          <input
+            type="text"
+            value={form.indexPattern ?? ''}
+            onChange={(e) => set('indexPattern', e.target.value)}
+            placeholder="logs-mfoa-uat-gke-1-uat*"
+            className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-md text-xs text-slate-200 outline-none focus:border-blue-500 transition-colors placeholder-slate-500 font-mono"
+          />
+          <p className="mt-1 text-[10px] text-slate-500">Matches the index pattern shown in OpenSearch Dashboards</p>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -128,14 +125,16 @@ export function Settings({ initial, onSaved }: Props) {
           </div>
         </div>
 
-        {/* Status message */}
         {status && (
-          <p className={`text-xs px-3 py-2 rounded-md ${status.ok ? 'bg-green-950 text-green-400 border border-green-800' : 'bg-red-950 text-red-400 border border-red-800'}`}>
+          <p className={`text-xs px-3 py-2 rounded-md ${
+            status.ok
+              ? 'bg-green-950 text-green-400 border border-green-800'
+              : 'bg-red-950 text-red-400 border border-red-800'
+          }`}>
             {status.msg}
           </p>
         )}
 
-        {/* Actions */}
         <div className="flex gap-2 pt-1">
           <button
             onClick={handleTest}

@@ -1,8 +1,7 @@
+import type { LogEntry, LogPayload, Severity } from '@/lib/logTypes';
+
 export interface OSConfig {
-  baseUrl: string;
   indexPattern: string;
-  username: string;
-  password: string;
   timeRange: string;
   size: number;
 }
@@ -11,8 +10,6 @@ export const DEFAULT_CONFIG: Partial<OSConfig> = {
   indexPattern: 'logs-*',
   timeRange: 'now-15m',
   size: 500,
-  username: '',
-  password: '',
 };
 
 export const TIME_RANGES = [
@@ -24,22 +21,116 @@ export const TIME_RANGES = [
   { label: '24 hours', value: 'now-24h' },
 ] as const;
 
-function authHeaders(config: OSConfig): HeadersInit {
-  const headers: HeadersInit = { 'Content-Type': 'application/json' };
-  if (config.username) {
-    headers['Authorization'] = `Basic ${btoa(`${config.username}:${config.password}`)}`;
-  }
-  return headers;
+// ── _source shape from OpenSearch hit ─────────────────────────────────────
+
+interface OSSource {
+  '@timestamp': string;
+  kubernetes?: { container_name?: string };
+  json_payload?: LogPayload | string | null;
+  text_payload?: string | null;
 }
 
-/** Fetch log rows from OpenSearch. Returns rows in the same shape as the CSV parser expects. */
-export async function queryOpenSearch(config: OSConfig): Promise<string[][]> {
-  const base = config.baseUrl.replace(/\/$/, '');
-  const url = `${base}/${config.indexPattern}/_search`;
+interface OSHit {
+  _source: OSSource;
+}
+
+// ── Parse a single OpenSearch hit into a LogEntry ─────────────────────────
+
+function normSeverity(s?: string): Severity {
+  if (!s) return 'INFO';
+  const u = s.toUpperCase();
+  if (u === 'ERROR' || u === 'CRITICAL' || u === 'FATAL') return 'ERROR';
+  if (u === 'WARNING' || u === 'WARN') return 'WARN';
+  if (u === 'DEBUG') return 'DEBUG';
+  return 'INFO';
+}
+
+function parseOSHit(hit: OSHit, id: number): LogEntry {
+  const src = hit._source;
+  const ts        = src['@timestamp'] ?? '';
+  const container = src.kubernetes?.container_name ?? '';
+
+  // json_payload from OpenSearch is already an object (unlike the CSV export where it is a string)
+  let payload: LogPayload = {};
+  const jp = src.json_payload;
+
+  if (jp && typeof jp === 'object') {
+    payload = jp as LogPayload;
+  } else if (typeof jp === 'string' && jp.trim() !== '-' && jp.trim() !== '') {
+    try { payload = JSON.parse(jp) as LogPayload; }
+    catch { payload = { message: jp, severity: 'INFO' }; }
+  } else if (src.text_payload && src.text_payload.trim() !== '-') {
+    payload = { message: src.text_payload.trim(), severity: 'INFO', _source: 'text_payload' };
+  } else {
+    payload = { message: '(empty)', severity: 'INFO' };
+  }
+
+  // Stream logs have correlationId inside the JSON-encoded payload.value field
+  let corrId = (payload['X-Correlation-ID'] as string) || '';
+  if (!corrId && typeof payload.value === 'string') {
+    try {
+      const val = JSON.parse(payload.value) as Record<string, unknown>;
+      if (typeof val.correlationId === 'string') corrId = val.correlationId;
+    } catch { /* not JSON */ }
+  }
+
+  const severity  = normSeverity(payload.severity as string | undefined);
+  // Prefer the precise ISO timestamp inside the payload; fall back to @timestamp
+  const payloadTs = payload.timestamp
+    ? Date.parse(payload.timestamp as string)
+    : Date.parse(ts);
+
+  return {
+    id,
+    ts,
+    payloadTs,
+    container,
+    payload,
+    severity,
+    message:  (payload.message  as string) || (payload.error as string) || '(no message)',
+    corrId,
+    error:    (payload.error    as string) || '',
+    httpReq:  payload.httpRequest,
+    callUrl:  (payload.call_to_url as string) || (payload.call_to_api as string) || undefined,
+    httpSC:   payload.http_status_code as number | undefined,
+  };
+}
+
+// ── Chrome tab helpers ─────────────────────────────────────────────────────
+
+export async function getActiveTab(): Promise<chrome.tabs.Tab> {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) resolve(tabs[0]);
+      else reject(new Error('No active tab found.'));
+    });
+  });
+}
+
+/** Send a message to the content script on the given tab and await the response. */
+async function proxyMessage(tabId: number, msg: object): Promise<{ ok: boolean; data?: unknown; error?: string }> {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, msg, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(
+          chrome.runtime.lastError.message ??
+          'Content script not ready. Make sure you are on the OpenSearch Dashboards tab.'
+        ));
+      } else {
+        resolve(response as { ok: boolean; data?: unknown; error?: string });
+      }
+    });
+  });
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────
+
+export async function queryOpenSearch(config: OSConfig): Promise<LogEntry[]> {
+  const tab = await getActiveTab();
+  if (!tab.id) throw new Error('Cannot communicate with the active tab.');
 
   const body = {
     size: config.size,
-    _source: ['@timestamp', 'kubernetes.container_name', 'json_payload', 'text_payload'],
     sort: [{ '@timestamp': { order: 'asc' } }],
     query: {
       bool: {
@@ -50,43 +141,35 @@ export async function queryOpenSearch(config: OSConfig): Promise<string[][]> {
     },
   };
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: authHeaders(config),
-    body: JSON.stringify(body),
+  const res = await proxyMessage(tab.id, {
+    type: 'OS_SEARCH',
+    indexPattern: config.indexPattern,
+    body,
   });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`OpenSearch ${res.status}: ${text.slice(0, 300)}`);
-  }
+  if (!res.ok) throw new Error(res.error ?? 'Unknown error from content script.');
 
-  const data = (await res.json()) as {
-    hits: { total: { value: number }; hits: Array<{ _source: Record<string, string> }> };
-  };
-
-  return data.hits.hits.map((hit) => {
-    const s = hit._source;
-    return [
-      s['@timestamp'] ?? '',
-      s['kubernetes.container_name'] ?? '',
-      s['json_payload'] ?? '',
-      s['text_payload'] ?? '',
-    ];
-  });
+  const hits = (res.data as { hits: { hits: OSHit[] } }).hits.hits;
+  return hits
+    .map((hit, i) => parseOSHit(hit, i))
+    .sort((a, b) => a.payloadTs - b.payloadTs);
 }
 
-/** Test connectivity — uses _count which is cheap. */
 export async function testConnection(config: OSConfig): Promise<number> {
-  const base = config.baseUrl.replace(/\/$/, '');
-  const url = `${base}/${config.indexPattern}/_count`;
-  const res = await fetch(url, { method: 'GET', headers: authHeaders(config) });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = (await res.json()) as { count: number };
-  return data.count;
+  const tab = await getActiveTab();
+  if (!tab.id) throw new Error('Cannot communicate with the active tab.');
+
+  const res = await proxyMessage(tab.id, {
+    type: 'OS_COUNT',
+    indexPattern: config.indexPattern,
+    body: {},
+  });
+
+  if (!res.ok) throw new Error(res.error ?? 'Connection failed.');
+  return (res.data as { count: number }).count;
 }
 
-// ── chrome.storage helpers ──────────────────────────────────────────────────
+// ── chrome.storage helpers ─────────────────────────────────────────────────
 
 export async function loadConfig(): Promise<Partial<OSConfig>> {
   return new Promise((resolve) => {
