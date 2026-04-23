@@ -3,7 +3,7 @@
   "name": "Log Explorer",
   "version": "1.0.0",
   "description": "GCP-style log explorer for OpenSearch — query and investigate logs directly from your browser.",
-  "permissions": ["sidePanel", "storage", "tabs", "activeTab"],
+  "permissions": ["sidePanel", "storage", "tabs", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js",
@@ -15,10 +15,5 @@
   "action": {
     "default_title": "Log Explorer"
   },
-  "content_scripts": [{
-    "matches": ["<all_urls>"],
-    "js": ["content.js"],
-    "run_at": "document_idle"
-  }],
   "icons": {}
 }

@@ -125,20 +125,35 @@ export async function getActiveTab(): Promise<chrome.tabs.Tab> {
   });
 }
 
-/** Send a message to the content script on the given tab and await the response. */
-async function proxyMessage(tabId: number, msg: object): Promise<{ ok: boolean; data?: unknown; error?: string }> {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, msg, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(
-          chrome.runtime.lastError.message ??
-          'Content script not ready. Make sure you are on the OpenSearch Dashboards tab.'
-        ));
-      } else {
-        resolve(response as { ok: boolean; data?: unknown; error?: string });
+interface FetchResult { ok: boolean; data?: unknown; error?: string }
+
+/**
+ * Execute a fetch directly on the active tab using chrome.scripting.executeScript.
+ * No content script needed — works immediately without any tab refresh.
+ */
+async function executeOnTab(tabId: number, indexPattern: string, body: object): Promise<FetchResult> {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (idx: string, reqBody: object): Promise<FetchResult> => {
+      try {
+        const r = await fetch('/internal/search/opensearch-with-long-numerals', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'osd-xsrf': 'osd-fetch' },
+          body: JSON.stringify({ params: { index: idx, body: reqBody } }),
+          credentials: 'same-origin',
+        });
+        if (!r.ok) {
+          const t = await r.text();
+          return { ok: false, error: `HTTP ${r.status}: ${t.slice(0, 200)}` };
+        }
+        return { ok: true, data: await r.json() };
+      } catch (e) {
+        return { ok: false, error: String(e) };
       }
-    });
+    },
+    args: [indexPattern, body],
   });
+  return (results[0].result ?? { ok: false, error: 'No result from tab' }) as FetchResult;
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -166,8 +181,8 @@ export async function queryOpenSearch(config: OSConfig): Promise<LogEntry[]> {
     },
   };
 
-  const res = await proxyMessage(tab.id, { type: 'OS_SEARCH', indexPattern: config.indexPattern, body });
-  if (!res.ok) throw new Error(res.error ?? 'Unknown error from content script.');
+  const res = await executeOnTab(tab.id, config.indexPattern, body);
+  if (!res.ok) throw new Error(res.error ?? 'Unknown error');
 
   const { hits } = (res.data as DashboardsSearchResponse).rawResponse.hits;
   return (hits as OSHit[])
@@ -179,8 +194,7 @@ export async function testConnection(config: OSConfig): Promise<number> {
   const tab = await getActiveTab();
   if (!tab.id) throw new Error('Cannot communicate with the active tab.');
 
-  const body = { size: 0, query: { match_all: {} } };
-  const res = await proxyMessage(tab.id, { type: 'OS_SEARCH', indexPattern: config.indexPattern, body });
+  const res = await executeOnTab(tab.id, config.indexPattern, { size: 0, query: { match_all: {} } });
   if (!res.ok) throw new Error(res.error ?? 'Connection failed.');
 
   const total = (res.data as DashboardsSearchResponse).rawResponse.hits.total;
