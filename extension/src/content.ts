@@ -1,22 +1,17 @@
-// Proxy OpenSearch API requests through the page's authenticated session.
-// The content script runs on the OpenSearch Dashboards page so fetch()
-// here uses the browser's existing cookies — no separate login needed.
+// Proxy OpenSearch Dashboards internal search through the page's existing session.
+// The content script runs on the Dashboards tab so fetch() uses the browser's cookies.
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg.type !== 'OS_SEARCH' && msg.type !== 'OS_COUNT') return false;
+  if (msg.type !== 'OS_SEARCH') return false;
 
   const { indexPattern, body } = msg as { indexPattern: string; body: object };
-  const path = msg.type === 'OS_COUNT'
-    ? `/${indexPattern}/_count`
-    : `/${indexPattern}/_search`;
 
-  fetch(path, {
+  fetch('/internal/search/opensearch-with-long-numerals', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'osd-xsrf': 'true',  // required by OpenSearch Dashboards
-      'kbn-xsrf': 'true',  // backward compat
+      'osd-xsrf': 'osd-fetch',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ params: { index: indexPattern, body } }),
     credentials: 'same-origin',
   })
     .then((r) => {
@@ -26,5 +21,5 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     .then((data) => sendResponse({ ok: true, data }))
     .catch((err: Error) => sendResponse({ ok: false, error: err.message }));
 
-  return true; // keep response channel open for async sendResponse
+  return true; // keep channel open for async sendResponse
 });

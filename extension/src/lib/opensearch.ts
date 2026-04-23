@@ -25,13 +25,26 @@ export const TIME_RANGES = [
 
 interface OSSource {
   '@timestamp': string;
+  // kubernetes is a nested object in the API response
   kubernetes?: { container_name?: string };
-  json_payload?: LogPayload | string | null;
+  // json_payload comes back as a pre-parsed object from the Dashboards internal API
+  json_payload?: Record<string, unknown> | string | null;
   text_payload?: string | null;
+  [key: string]: unknown;
 }
 
 interface OSHit {
   _source: OSSource;
+}
+
+// Shape of the Dashboards internal search response
+interface DashboardsSearchResponse {
+  rawResponse: {
+    hits: {
+      total: number | { value: number };
+      hits: OSHit[];
+    };
+  };
 }
 
 // ── Parse a single OpenSearch hit into a LogEntry ─────────────────────────
@@ -47,26 +60,32 @@ function normSeverity(s?: string): Severity {
 
 function parseOSHit(hit: OSHit, id: number): LogEntry {
   const src = hit._source;
-  const ts        = src['@timestamp'] ?? '';
+  const ts = src['@timestamp'] ?? '';
   const container = src.kubernetes?.container_name ?? '';
 
-  // json_payload from OpenSearch is already an object (unlike the CSV export where it is a string)
+  // json_payload is a pre-parsed object from the Dashboards internal API.
+  // Fall back to text_payload when json_payload is absent or "-".
   let payload: LogPayload = {};
   const jp = src.json_payload;
 
   if (jp && typeof jp === 'object') {
     payload = jp as LogPayload;
   } else if (typeof jp === 'string' && jp.trim() !== '-' && jp.trim() !== '') {
-    try { payload = JSON.parse(jp) as LogPayload; }
-    catch { payload = { message: jp, severity: 'INFO' }; }
-  } else if (src.text_payload && src.text_payload.trim() !== '-') {
+    try {
+      payload = JSON.parse(jp) as LogPayload;
+    } catch {
+      payload = { message: jp, severity: 'INFO' };
+    }
+  } else if (src.text_payload && typeof src.text_payload === 'string' && src.text_payload.trim() !== '-') {
     payload = { message: src.text_payload.trim(), severity: 'INFO', _source: 'text_payload' };
   } else {
     payload = { message: '(empty)', severity: 'INFO' };
   }
 
-  // Stream logs have correlationId inside the JSON-encoded payload.value field
-  let corrId = (payload['X-Correlation-ID'] as string) || '';
+  // Correlation ID: standard header, lowercase variant (Kong/nginx), or stream log value field
+  let corrId = (payload['X-Correlation-ID'] as string)
+    || (payload['x-correlation-id'] as string)
+    || '';
   if (!corrId && typeof payload.value === 'string') {
     try {
       const val = JSON.parse(payload.value) as Record<string, unknown>;
@@ -74,8 +93,7 @@ function parseOSHit(hit: OSHit, id: number): LogEntry {
     } catch { /* not JSON */ }
   }
 
-  const severity  = normSeverity(payload.severity as string | undefined);
-  // Prefer the precise ISO timestamp inside the payload; fall back to @timestamp
+  const severity = normSeverity(payload.severity as string | undefined);
   const payloadTs = payload.timestamp
     ? Date.parse(payload.timestamp as string)
     : Date.parse(ts);
@@ -87,9 +105,9 @@ function parseOSHit(hit: OSHit, id: number): LogEntry {
     container,
     payload,
     severity,
-    message:  (payload.message  as string) || (payload.error as string) || '(no message)',
+    message: (payload.message as string) || (payload.error as string) || '(no message)',
     corrId,
-    error:    (payload.error    as string) || '',
+    error:   (payload.error as string) || '',
     httpReq:  payload.httpRequest,
     callUrl:  (payload.call_to_url as string) || (payload.call_to_api as string) || undefined,
     httpSC:   payload.http_status_code as number | undefined,
@@ -131,26 +149,28 @@ export async function queryOpenSearch(config: OSConfig): Promise<LogEntry[]> {
 
   const body = {
     size: config.size,
-    sort: [{ '@timestamp': { order: 'asc' } }],
+    version: true,
+    stored_fields: ['*'],
+    _source: { excludes: [] as string[] },
+    sort: [{ '@timestamp': { order: 'asc', unmapped_type: 'boolean' } }],
     query: {
       bool: {
+        must: [],
         filter: [
+          { match_all: {} },
           { range: { '@timestamp': { gte: config.timeRange, lte: 'now' } } },
         ],
+        should: [],
+        must_not: [],
       },
     },
   };
 
-  const res = await proxyMessage(tab.id, {
-    type: 'OS_SEARCH',
-    indexPattern: config.indexPattern,
-    body,
-  });
-
+  const res = await proxyMessage(tab.id, { type: 'OS_SEARCH', indexPattern: config.indexPattern, body });
   if (!res.ok) throw new Error(res.error ?? 'Unknown error from content script.');
 
-  const hits = (res.data as { hits: { hits: OSHit[] } }).hits.hits;
-  return hits
+  const { hits } = (res.data as DashboardsSearchResponse).rawResponse.hits;
+  return (hits as OSHit[])
     .map((hit, i) => parseOSHit(hit, i))
     .sort((a, b) => a.payloadTs - b.payloadTs);
 }
@@ -159,14 +179,12 @@ export async function testConnection(config: OSConfig): Promise<number> {
   const tab = await getActiveTab();
   if (!tab.id) throw new Error('Cannot communicate with the active tab.');
 
-  const res = await proxyMessage(tab.id, {
-    type: 'OS_COUNT',
-    indexPattern: config.indexPattern,
-    body: {},
-  });
-
+  const body = { size: 0, query: { match_all: {} } };
+  const res = await proxyMessage(tab.id, { type: 'OS_SEARCH', indexPattern: config.indexPattern, body });
   if (!res.ok) throw new Error(res.error ?? 'Connection failed.');
-  return (res.data as { count: number }).count;
+
+  const total = (res.data as DashboardsSearchResponse).rawResponse.hits.total;
+  return typeof total === 'number' ? total : total.value;
 }
 
 // ── chrome.storage helpers ─────────────────────────────────────────────────
