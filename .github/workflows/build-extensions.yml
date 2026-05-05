@@ -15,11 +15,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Cookie Bridge (no build step — pure HTML/JS) ─────────────────────
-      - name: Zip Cookie Bridge
+      - uses: browser-actions/setup-chrome@v1
+
+      # ── Cookie Bridge → .crx (single-file install) ───────────────────────
+      - name: Pack Cookie Bridge as CRX
         run: |
-          cd cookie-bridge
-          zip -r ../cookie-bridge.zip . -x "*.DS_Store"
+          # Generate signing key (or use stored secret for stable extension ID)
+          if [ -n "${{ secrets.COOKIE_BRIDGE_KEY }}" ]; then
+            echo "${{ secrets.COOKIE_BRIDGE_KEY }}" > key.pem
+          else
+            openssl genrsa -out key.pem 2048
+          fi
+          google-chrome \
+            --pack-extension=$(pwd)/cookie-bridge \
+            --pack-extension-key=$(pwd)/key.pem
+          # Chrome outputs cookie-bridge.crx next to the folder
+          ls -lh cookie-bridge.crx
 
       # ── Log Explorer Extension ────────────────────────────────────────────
       - uses: actions/setup-node@v4
@@ -36,10 +47,18 @@ jobs:
         working-directory: extension
         run: npm run build
 
-      - name: Zip Log Explorer extension
+      - name: Pack Log Explorer as CRX
         run: |
-          cd extension/dist
-          zip -r ../../log-explorer-extension.zip .
+          if [ -n "${{ secrets.LOG_EXPLORER_KEY }}" ]; then
+            echo "${{ secrets.LOG_EXPLORER_KEY }}" > ext-key.pem
+          else
+            openssl genrsa -out ext-key.pem 2048
+          fi
+          google-chrome \
+            --pack-extension=$(pwd)/extension/dist \
+            --pack-extension-key=$(pwd)/ext-key.pem
+          mv extension/dist.crx log-explorer-extension.crx
+          ls -lh log-explorer-extension.crx
 
       # ── Create / update GitHub Release ───────────────────────────────────
       - name: Delete existing latest release
@@ -47,26 +66,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create GitHub Release with extension ZIPs
+      - name: Create GitHub Release
         run: |
           gh release create latest \
             --title "Chrome Extensions — latest build" \
             --notes "$(cat <<'EOF'
           ## Chrome Extensions
 
-          ### Cookie Bridge
-          Reads cookies + search state from the OpenSearch Dashboards tab and sends them to the Log Explorer web app — no manual copy-paste needed.
+          ### Cookie Bridge (`cookie-bridge.crx`)
+          Reads cookies + search state from the OSD tab and sends them to the Log Explorer web app — no manual copy-paste.
 
-          **Install:** Download `cookie-bridge.zip` → unzip → open `chrome://extensions` → Enable Developer mode → Load unpacked → select the unzipped folder.
+          **Install:** Download `cookie-bridge.crx` → open `chrome://extensions` → enable **Developer mode** → drag the `.crx` file onto the page.
 
-          ### Log Explorer Extension
+          ### Log Explorer (`log-explorer-extension.crx`)
           Side-panel log explorer that reads directly from the OSD Discover tab.
 
-          **Install:** Same steps with `log-explorer-extension.zip`.
+          **Install:** Same steps with `log-explorer-extension.crx`.
+
+          ---
+          > For a stable extension ID across updates, add `COOKIE_BRIDGE_KEY` and `LOG_EXPLORER_KEY` secrets (PEM private keys) to this repo's Settings → Secrets.
           EOF
           )" \
             --prerelease \
-            cookie-bridge.zip \
-            log-explorer-extension.zip
+            cookie-bridge.crx \
+            log-explorer-extension.crx
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
