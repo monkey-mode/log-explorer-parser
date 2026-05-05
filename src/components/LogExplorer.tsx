@@ -285,7 +285,7 @@ function ConnectPanel({ onLogs }: ConnectPanelProps) {
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          Download extension
+          Download (.zip)
         </a>
       </div>
 

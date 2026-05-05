@@ -15,22 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: browser-actions/setup-chrome@v1
-
-      # ── Cookie Bridge → .crx (single-file install) ───────────────────────
-      - name: Pack Cookie Bridge as CRX
+      # ── Cookie Bridge → .zip (load unpacked) ─────────────────────────────
+      - name: Pack Cookie Bridge as zip
         run: |
-          # Generate signing key (or use stored secret for stable extension ID)
-          if [ -n "${{ secrets.COOKIE_BRIDGE_KEY }}" ]; then
-            echo "${{ secrets.COOKIE_BRIDGE_KEY }}" > key.pem
-          else
-            openssl genrsa -out key.pem 2048
-          fi
-          google-chrome \
-            --pack-extension=$(pwd)/cookie-bridge \
-            --pack-extension-key=$(pwd)/key.pem
-          # Chrome outputs cookie-bridge.crx next to the folder
-          ls -lh cookie-bridge.crx
+          cd cookie-bridge
+          zip -r ../cookie-bridge.zip . -x "*.DS_Store"
+          cd ..
+          ls -lh cookie-bridge.zip
 
       # ── Log Explorer Extension ────────────────────────────────────────────
       - uses: actions/setup-node@v4
@@ -47,18 +38,12 @@ jobs:
         working-directory: extension
         run: npm run build
 
-      - name: Pack Log Explorer as CRX
+      - name: Pack Log Explorer as zip
         run: |
-          if [ -n "${{ secrets.LOG_EXPLORER_KEY }}" ]; then
-            echo "${{ secrets.LOG_EXPLORER_KEY }}" > ext-key.pem
-          else
-            openssl genrsa -out ext-key.pem 2048
-          fi
-          google-chrome \
-            --pack-extension=$(pwd)/extension/dist \
-            --pack-extension-key=$(pwd)/ext-key.pem
-          mv extension/dist.crx log-explorer-extension.crx
-          ls -lh log-explorer-extension.crx
+          cd extension/dist
+          zip -r ../../log-explorer-extension.zip .
+          cd ../..
+          ls -lh log-explorer-extension.zip
 
       # ── Create / update GitHub Release ───────────────────────────────────
       - name: Delete existing latest release
@@ -73,22 +58,27 @@ jobs:
             --notes "$(cat <<'EOF'
           ## Chrome Extensions
 
-          ### Cookie Bridge (`cookie-bridge.crx`)
+          ### Cookie Bridge (`cookie-bridge.zip`)
           Reads cookies + search state from the OSD tab and sends them to the Log Explorer web app — no manual copy-paste.
 
-          **Install:** Download `cookie-bridge.crx` → open `chrome://extensions` → enable **Developer mode** → drag the `.crx` file onto the page.
+          **Install:**
+          1. Download and unzip `cookie-bridge.zip` to a permanent folder
+          2. Open `chrome://extensions`
+          3. Enable **Developer mode** (top-right toggle)
+          4. Click **Load unpacked** → select the unzipped folder
 
-          ### Log Explorer (`log-explorer-extension.crx`)
+          ### Log Explorer (`log-explorer-extension.zip`)
           Side-panel log explorer that reads directly from the OSD Discover tab.
 
-          **Install:** Same steps with `log-explorer-extension.crx`.
+          **Install:** Same steps with `log-explorer-extension.zip`.
 
           ---
-          > For a stable extension ID across updates, add `COOKIE_BRIDGE_KEY` and `LOG_EXPLORER_KEY` secrets (PEM private keys) to this repo's Settings → Secrets.
+          > Chrome blocks side-loading `.crx` files from outside the Web Store (since Chrome 73).
+          > The zip + Load unpacked method is the only reliable way to install self-signed extensions.
           EOF
           )" \
             --prerelease \
-            cookie-bridge.crx \
-            log-explorer-extension.crx
+            cookie-bridge.zip \
+            log-explorer-extension.zip
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

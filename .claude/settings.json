@@ -7,7 +7,9 @@
       "Bash(npm install:*)",
       "Bash(node /Users/ytwok/dev/project/log-explorer-parser/node_modules/typescript/lib/tsc.js --noEmit)",
       "Bash(git rm:*)",
-      "Bash(node -e \"const c = require\\('@types/chrome'\\); console.log\\('ok'\\)\")"
+      "Bash(node -e \"const c = require\\('@types/chrome'\\); console.log\\('ok'\\)\")",
+      "Bash(npx next *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST http://localhost:3000/api/proxy -H \"Content-Type: application/json\" -d '{\"url\":\"\",\"body\":{},\"cookie\":\"\"}')"
     ]
   }
 }
