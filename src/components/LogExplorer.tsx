@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { LogEntry, FilterState } from '@/lib/logTypes';
 import { parseLogs } from '@/lib/csvParser';
+import { parseOSResponse, isOSResponse } from '@/lib/osParser';
 import { LogRow } from './LogRow';
 
 // ── Multi-select service dropdown ──────────────────────────────────────────
@@ -16,7 +17,6 @@ function ServicePicker({ services, selected, onChange }: ServicePickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
@@ -64,33 +64,14 @@ function ServicePicker({ services, selected, onChange }: ServicePickerProps) {
 
       {open && (
         <div className="absolute top-full right-0 mt-1 z-40 bg-slate-800 border border-slate-700 rounded-md shadow-xl min-w-[220px] max-h-72 overflow-y-auto">
-          {/* Select all / clear */}
           <div className="flex gap-2 px-3 py-2 border-b border-slate-700">
-            <button
-              onClick={() => onChange([...services])}
-              className="text-[11px] text-blue-400 hover:text-blue-300"
-            >
-              Select all
-            </button>
+            <button onClick={() => onChange([...services])} className="text-[11px] text-blue-400 hover:text-blue-300">Select all</button>
             <span className="text-slate-600">·</span>
-            <button
-              onClick={() => onChange([])}
-              className="text-[11px] text-slate-400 hover:text-slate-200"
-            >
-              Clear
-            </button>
+            <button onClick={() => onChange([])} className="text-[11px] text-slate-400 hover:text-slate-200">Clear</button>
           </div>
           {services.map((svc) => (
-            <label
-              key={svc}
-              className="flex items-center gap-2.5 px-3 py-1.5 hover:bg-slate-700 cursor-pointer text-xs text-slate-300"
-            >
-              <input
-                type="checkbox"
-                checked={selected.includes(svc)}
-                onChange={() => toggle(svc)}
-                className="w-3.5 h-3.5 accent-blue-500 cursor-pointer"
-              />
+            <label key={svc} className="flex items-center gap-2.5 px-3 py-1.5 hover:bg-slate-700 cursor-pointer text-xs text-slate-300">
+              <input type="checkbox" checked={selected.includes(svc)} onChange={() => toggle(svc)} className="w-3.5 h-3.5 accent-blue-500 cursor-pointer" />
               <span className="truncate">{svc}</span>
             </label>
           ))}
@@ -99,6 +80,308 @@ function ServicePicker({ services, selected, onChange }: ServicePickerProps) {
     </div>
   );
 }
+
+// ── curl parser ────────────────────────────────────────────────────────────
+
+interface ParsedCurl {
+  url: string;
+  cookie: string;
+  body: unknown;
+}
+
+function parseCurl(raw: string): ParsedCurl | null {
+  // Extract URL — first bare argument after 'curl'
+  const urlMatch = raw.match(/curl\s+'([^']+)'/) ?? raw.match(/curl\s+"([^"]+)"/) ?? raw.match(/curl\s+(\S+)/);
+  if (!urlMatch) return null;
+  const url = urlMatch[1];
+
+  // Extract cookie from -b / --cookie or -H 'cookie: ...'
+  const cookieB = raw.match(/(?:-b|--cookie)\s+'([^']+)'/) ?? raw.match(/(?:-b|--cookie)\s+"([^"]+)"/);
+  const cookieH = raw.match(/-H\s+'[Cc]ookie:\s*([^']+)'/) ?? raw.match(/-H\s+"[Cc]ookie:\s*([^"]+)"/);
+  const cookie = (cookieB?.[1] ?? cookieH?.[1] ?? '').trim();
+
+  // Extract body from --data-raw / --data / -d
+  const bodyMatch =
+    raw.match(/(?:--data-raw|--data|-d)\s+'([\s\S]+?)'\s*(?:-[A-Z]|$)/) ??
+    raw.match(/(?:--data-raw|--data|-d)\s+'([\s\S]+?)'$/) ??
+    raw.match(/(?:--data-raw|--data|-d)\s+"([\s\S]+?)"$/);
+
+  let body: unknown = null;
+  if (bodyMatch) {
+    try { body = JSON.parse(bodyMatch[1]); } catch { /* keep null */ }
+  }
+
+  return { url, cookie, body };
+}
+
+// ── Connect panel ──────────────────────────────────────────────────────────
+
+const LS_CURL = 'os_proxy_curl';
+
+interface ConnectPanelProps {
+  onLogs: (logs: LogEntry[], label: string) => void;
+}
+
+async function proxyFetch(url: string, body: unknown, cookie: string): Promise<unknown> {
+  const res = await fetch('/api/proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, body, cookie }),
+  });
+  const data = await res.json() as unknown;
+  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  return data;
+}
+
+interface ExtData {
+  cookie: string;
+  baseUrl: string;
+  indexPattern: string | null;
+  indexPatternId: string | null;
+  timeFrom: string;
+  timeTo: string;
+  containers: string[];
+}
+
+function ConnectPanel({ onLogs }: ConnectPanelProps) {
+  const [tab, setTab] = useState<'ext' | 'curl'>('ext');
+
+  // ── Extension tab state ──
+  const [extData,    setExtData]    = useState<ExtData | null>(null);
+  const [extIndex,   setExtIndex]   = useState('logs-*');
+  const [extSize,    setExtSize]    = useState(500);
+  const [extLoading, setExtLoading] = useState(false);
+  const [extErr,     setExtErr]     = useState('');
+
+  const checkExtCookie = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/ext-cookie');
+      const data = await res.json() as { cookie: string | null } & Partial<ExtData>;
+      if (data.cookie) {
+        const d: ExtData = {
+          cookie:         data.cookie,
+          baseUrl:        data.baseUrl        ?? '',
+          indexPattern:   data.indexPattern   ?? null,
+          indexPatternId: data.indexPatternId ?? null,
+          timeFrom:       data.timeFrom       ?? 'now-1h',
+          timeTo:         data.timeTo         ?? 'now',
+          containers:     data.containers     ?? [],
+        };
+        setExtData(d);
+        // Auto-fill index if resolved
+        if (d.indexPattern) setExtIndex(d.indexPattern);
+        setExtErr('');
+      } else {
+        setExtData(null);
+      }
+    } catch { /* server not ready */ }
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'ext' && !extData) {
+      checkExtCookie();
+      const id = setInterval(checkExtCookie, 3000);
+      return () => clearInterval(id);
+    }
+  }, [tab, extData, checkExtCookie]);
+
+  const fetchExt = async () => {
+    if (!extData) return;
+    setExtLoading(true);
+    setExtErr('');
+    try {
+      const endpoint = `${extData.baseUrl}/internal/search/opensearch-with-long-numerals`;
+
+      const containerFilter = extData.containers.length > 0 ? {
+        bool: {
+          minimum_should_match: 1,
+          should: extData.containers.map(c => ({ match_phrase: { 'kubernetes.container_name': c } })),
+        },
+      } : null;
+
+      const filters: object[] = [
+        { match_all: {} },
+        ...(containerFilter ? [containerFilter] : []),
+        { range: { '@timestamp': { gte: extData.timeFrom, lte: extData.timeTo, format: 'strict_date_optional_time' } } },
+      ];
+
+      const body = {
+        params: {
+          index: extIndex,
+          body: {
+            size: extSize,
+            version: true,
+            stored_fields: ['*'],
+            _source: { excludes: [] as string[] },
+            sort: [{ '@timestamp': { order: 'asc', unmapped_type: 'boolean' } }],
+            query: { bool: { must: [], filter: filters, should: [], must_not: [] } },
+          },
+        },
+      };
+      const data = await proxyFetch(endpoint, body, extData.cookie);
+      const logs = parseOSResponse(data);
+      if (logs.length === 0) throw new Error('No hits — check index pattern or time range.');
+      onLogs(logs, `${extIndex} (live)`);
+    } catch (e) {
+      setExtErr((e as Error).message);
+    } finally {
+      setExtLoading(false);
+    }
+  };
+
+  // ── cURL tab state ──
+  const [curlText, setCurlText] = useState(() =>
+    typeof window !== 'undefined' ? localStorage.getItem(LS_CURL) ?? '' : ''
+  );
+  const [curlLoading, setCurlLoading] = useState(false);
+  const [curlErr, setCurlErr]   = useState('');
+  const [parsed, setParsed]     = useState<ParsedCurl | null>(null);
+
+  const onPaste = (text: string) => {
+    setCurlText(text);
+    setParsed(parseCurl(text));
+    setCurlErr('');
+  };
+
+  const fetchCurl = async () => {
+    const p = parsed ?? parseCurl(curlText);
+    if (!p) { setCurlErr('Could not parse curl command.'); return; }
+    if (!p.cookie) { setCurlErr('No cookie found in curl command.'); return; }
+    localStorage.setItem(LS_CURL, curlText);
+    setCurlLoading(true);
+    setCurlErr('');
+    try {
+      const data = await proxyFetch(p.url, p.body, p.cookie);
+      const logs = parseOSResponse(data);
+      if (logs.length === 0) throw new Error('No hits — check the time range in the curl body.');
+      const indexMatch = curlText.match(/"index"\s*:\s*"([^"]+)"/);
+      onLogs(logs, `${indexMatch?.[1] ?? 'opensearch'} (live)`);
+    } catch (e) {
+      setCurlErr((e as Error).message);
+    } finally {
+      setCurlLoading(false);
+    }
+  };
+
+  const tabCls = (t: 'ext' | 'curl') =>
+    `px-3 py-1 text-[11px] font-medium rounded-t border-b-2 transition-colors ${
+      tab === t ? 'border-blue-500 text-blue-300' : 'border-transparent text-slate-500 hover:text-slate-300'
+    }`;
+
+  return (
+    <div className="bg-slate-900 border-b border-slate-700 flex flex-col text-xs">
+      {/* Tabs */}
+      <div className="flex items-center gap-1 px-4 pt-2 border-b border-slate-800">
+        <button className={tabCls('ext')}  onClick={() => setTab('ext')}>Cookie Bridge</button>
+        <button className={tabCls('curl')} onClick={() => setTab('curl')}>Paste cURL</button>
+        <a
+          href="https://github.com/monkey-mode/log-explorer-parser/releases/tag/latest"
+          target="_blank"
+          rel="noreferrer"
+          className="ml-auto mb-1.5 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded border border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300 transition-colors"
+        >
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          Download extension
+        </a>
+      </div>
+
+      <div className="px-4 py-3 flex flex-col gap-2">
+        {tab === 'ext' && (
+          <>
+            {extData ? (
+              <div className="flex flex-col gap-1 px-2.5 py-1.5 bg-green-950/40 border border-green-800/50 rounded text-[11px]">
+                <div className="flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+                  <span className="text-green-300 font-medium">Cookie received</span>
+                  <span className="text-green-600 truncate">{extData.baseUrl}</span>
+                  <button onClick={checkExtCookie} className="ml-auto text-green-600 hover:text-green-400">↻</button>
+                </div>
+                {extData.containers.length > 0 && (
+                  <div className="text-slate-500 pl-3.5 text-[10px] truncate">
+                    svcs: {extData.containers.join(', ')}
+                  </div>
+                )}
+                <div className="text-slate-500 pl-3.5 text-[10px]">
+                  time: {extData.timeFrom} → {extData.timeTo}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-800/60 border border-slate-700 rounded text-[11px] text-slate-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-600 shrink-0 animate-pulse" />
+                Waiting for Cookie Bridge extension… click its icon on the OSD tab
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <span className="text-slate-500 w-12 shrink-0 text-right">Index</span>
+              <input
+                value={extIndex}
+                onChange={(e) => setExtIndex(e.target.value)}
+                placeholder="logs-*"
+                className="w-48 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 outline-none focus:border-blue-500 font-mono text-[11px]"
+              />
+              <span className="text-slate-500 w-8 shrink-0 text-right">Size</span>
+              <input
+                type="number"
+                value={extSize}
+                onChange={(e) => setExtSize(Number(e.target.value))}
+                min={1} max={10000}
+                className="w-20 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 outline-none focus:border-blue-500 font-mono text-[11px]"
+              />
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={fetchExt}
+                disabled={extLoading || !extData}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded font-semibold transition-colors"
+              >
+                {extLoading ? 'Fetching…' : 'Fetch logs'}
+              </button>
+              {extErr && <span className="text-red-400">{extErr}</span>}
+            </div>
+          </>
+        )}
+
+        {tab === 'curl' && (
+          <>
+            <div className="text-slate-500">
+              DevTools → Network → right-click request →{' '}
+              <span className="text-slate-300 font-medium">Copy as cURL</span> → paste below
+            </div>
+            <textarea
+              value={curlText}
+              onChange={(e) => onPaste(e.target.value)}
+              placeholder={"curl 'https://logging-nonprd.gcp.ktbapp.tech/internal/search/...' \\\n  -b 'cookie...' \\\n  --data-raw '{...}'"}
+              rows={5}
+              className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 outline-none focus:border-blue-500 font-mono text-[10px] resize-y leading-relaxed"
+            />
+            {parsed && (
+              <div className="flex gap-4 text-[10px] text-slate-500 font-mono">
+                <span><span className="text-slate-600">cookie </span><span className={parsed.cookie ? 'text-green-400' : 'text-red-400'}>{parsed.cookie ? `${parsed.cookie.length} chars ✓` : 'not found'}</span></span>
+                <span><span className="text-slate-600">body </span><span className={parsed.body ? 'text-green-400' : 'text-yellow-400'}>{parsed.body ? 'parsed ✓' : 'not found'}</span></span>
+              </div>
+            )}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={fetchCurl}
+                disabled={curlLoading || !curlText.trim()}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded font-semibold transition-colors"
+              >
+                {curlLoading ? 'Fetching…' : 'Fetch logs'}
+              </button>
+              {curlErr && <span className="text-red-400">{curlErr}</span>}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Main explorer ──────────────────────────────────────────────────────────
 
 const SEV_BUTTONS = ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'] as const;
 
@@ -111,9 +394,10 @@ const SEV_BTN_ACTIVE: Record<string, string> = {
 };
 
 export function LogExplorer() {
-  const [allLogs, setAllLogs] = useState<LogEntry[]>([]);
+  const [allLogs,  setAllLogs]  = useState<LogEntry[]>([]);
   const [fileName, setFileName] = useState<string>('');
-  const [loading, setLoading] = useState(false);
+  const [loading,  setLoading]  = useState(false);
+  const [showConnect, setShowConnect] = useState(false);
   const [filters, setFilters] = useState<FilterState>({
     search: '',
     severity: 'ALL',
@@ -121,25 +405,24 @@ export function LogExplorer() {
     corrId: '',
   });
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const fileInputRef   = useRef<HTMLInputElement>(null);
+  const searchRef      = useRef<HTMLInputElement>(null);
   const dropOverlayRef = useRef<HTMLDivElement>(null);
 
-  // Derived services list
   const services = useMemo(
     () => [...new Set(allLogs.map((l) => l.container))].sort(),
     [allLogs]
   );
 
-  // Stats
   const stats = useMemo(() => {
     if (!allLogs.length) return null;
-    const errors = allLogs.filter((l) => l.severity === 'ERROR').length;
-    const warns  = allLogs.filter((l) => l.severity === 'WARN').length;
-    return { total: allLogs.length, errors, warns };
+    return {
+      total:  allLogs.length,
+      errors: allLogs.filter((l) => l.severity === 'ERROR').length,
+      warns:  allLogs.filter((l) => l.severity === 'WARN').length,
+    };
   }, [allLogs]);
 
-  // Filtered logs
   const filteredLogs = useMemo(() => {
     const q = filters.search.toLowerCase().trim();
     return allLogs.filter((log) => {
@@ -148,42 +431,48 @@ export function LogExplorer() {
       if (filters.corrId && log.corrId !== filters.corrId) return false;
       if (q) {
         const haystack = [
-          log.message,
-          log.error,
-          log.container,
-          log.corrId,
-          log.callUrl ?? '',
-          log.httpReq?.requestUrl ?? '',
-          log.httpReq?.requestMethod ?? '',
-          log.payload.caller ?? '',
-          String(log.httpSC ?? ''),
-          String(log.httpReq?.status ?? ''),
+          log.message, log.error, log.container, log.corrId,
+          log.callUrl ?? '', log.httpReq?.requestUrl ?? '', log.httpReq?.requestMethod ?? '',
+          log.payload.caller ?? '', String(log.httpSC ?? ''), String(log.httpReq?.status ?? ''),
           JSON.stringify(log.payload),
-        ]
-          .join(' ')
-          .toLowerCase();
+        ].join(' ').toLowerCase();
         if (!haystack.includes(q)) return false;
       }
       return true;
     });
   }, [allLogs, filters]);
 
-  // Load CSV
+  const loadLogs = useCallback((logs: LogEntry[], label: string) => {
+    setAllLogs(logs.sort((a, b) => a.payloadTs - b.payloadTs));
+    setFileName(label);
+    setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
+    setShowConnect(false);
+  }, []);
+
   const loadFile = useCallback((file: File) => {
-    setFileName(file.name);
     setLoading(true);
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      const logs = parseLogs(text).sort((a, b) => a.payloadTs - b.payloadTs);
-      setAllLogs(logs);
-      setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
+      try {
+        if (file.name.endsWith('.json')) {
+          const data = JSON.parse(text) as unknown;
+          if (isOSResponse(data)) {
+            loadLogs(parseOSResponse(data), file.name);
+          } else {
+            alert('JSON file is not an OpenSearch response (missing rawResponse.hits.hits).');
+          }
+        } else {
+          loadLogs(parseLogs(text), file.name);
+        }
+      } catch {
+        alert('Failed to parse file.');
+      }
       setLoading(false);
     };
     reader.readAsText(file);
-  }, []);
+  }, [loadLogs]);
 
-  // File input change
   const onFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -224,7 +513,7 @@ export function LogExplorer() {
         setFilters((f) => ({ ...f, corrId: '' }));
         return;
       }
-      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT') {
+      if (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
         e.preventDefault();
         searchRef.current?.focus();
       }
@@ -246,7 +535,7 @@ export function LogExplorer() {
         ref={dropOverlayRef}
         className="hidden fixed inset-0 z-50 items-center justify-center bg-blue-900/20 border-4 border-dashed border-blue-500 text-blue-300 text-xl font-semibold pointer-events-none"
       >
-        📂 Drop CSV file here
+        Drop CSV or JSON file here
       </div>
 
       {/* ── Header ── */}
@@ -257,20 +546,38 @@ export function LogExplorer() {
             <polyline points="14 2 14 8 20 8"/>
             <line x1="16" y1="13" x2="8" y2="13"/>
             <line x1="16" y1="17" x2="8" y2="17"/>
-            <polyline points="10 9 9 9 8 9"/>
           </svg>
           <span className="font-bold text-white text-[15px] tracking-tight">Log Explorer</span>
         </div>
 
-        <label className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-md cursor-pointer transition-colors">
+        {/* Load file button */}
+        <label className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold rounded-md cursor-pointer transition-colors">
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          Load CSV
-          <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={onFileChange} />
+          Load file
+          <input ref={fileInputRef} type="file" accept=".csv,.json,text/csv,application/json" className="hidden" onChange={onFileChange} />
         </label>
+
+        {/* Connect button */}
+        <button
+          onClick={() => setShowConnect((v) => !v)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors ${
+            showConnect
+              ? 'bg-blue-700 border-blue-600 text-white'
+              : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white'
+          }`}
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+            <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+            <line x1="12" y1="20" x2="12.01" y2="20"/>
+          </svg>
+          Connect
+        </button>
 
         {fileName && (
           <span className="text-xs text-slate-500 truncate max-w-[200px]">{fileName}</span>
@@ -287,9 +594,11 @@ export function LogExplorer() {
         {loading && <span className="text-xs text-slate-500 ml-2 animate-pulse">Parsing…</span>}
       </header>
 
+      {/* ── Connect panel ── */}
+      {showConnect && <ConnectPanel onLogs={loadLogs} />}
+
       {/* ── Filters ── */}
       <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-800 shrink-0 flex-wrap">
-        {/* Search */}
         <div className="relative flex-1 min-w-[200px]">
           <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
@@ -304,7 +613,6 @@ export function LogExplorer() {
           />
         </div>
 
-        {/* Severity */}
         <div className="flex gap-1">
           {SEV_BUTTONS.map((sev) => (
             <button
@@ -321,25 +629,13 @@ export function LogExplorer() {
           ))}
         </div>
 
-        {/* Service multi-select */}
-        <ServicePicker
-          services={services}
-          selected={filters.services}
-          onChange={setServices}
-        />
+        <ServicePicker services={services} selected={filters.services} onChange={setServices} />
 
-        {/* Corr-ID chip */}
         {filters.corrId && (
           <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-950 border border-blue-700 rounded-full text-[11px] text-blue-300">
             <span className="text-blue-500 font-medium">corr-id:</span>
             <span className="font-mono">{filters.corrId.substring(0, 16)}…</span>
-            <button
-              onClick={clearCorrId}
-              className="text-blue-400 hover:text-white font-bold leading-none ml-0.5"
-              title="Clear filter (Esc)"
-            >
-              ×
-            </button>
+            <button onClick={clearCorrId} className="text-blue-400 hover:text-white font-bold leading-none ml-0.5" title="Clear filter (Esc)">×</button>
           </div>
         )}
       </div>
@@ -348,7 +644,7 @@ export function LogExplorer() {
       <div className="px-4 py-1 bg-slate-900/80 border-b border-slate-800 text-[11px] text-slate-500 shrink-0">
         {allLogs.length > 0
           ? `Showing ${filteredLogs.length.toLocaleString()} of ${allLogs.length.toLocaleString()} entries`
-          : 'No file loaded'}
+          : 'No data loaded'}
       </div>
 
       {/* ── Log list ── */}
@@ -360,17 +656,14 @@ export function LogExplorer() {
               <polyline points="14 2 14 8 20 8"/>
               <line x1="16" y1="13" x2="8" y2="13"/>
               <line x1="16" y1="17" x2="8" y2="17"/>
-              <polyline points="10 9 9 9 8 9"/>
             </svg>
             <div className="text-center">
-              <p className="text-slate-300 font-medium mb-1">Load a CSV to start exploring logs</p>
-              <p className="text-sm text-slate-500 max-w-sm">
-                Export from OpenSearch with{' '}
-                <code className="text-slate-400">@timestamp</code>,{' '}
-                <code className="text-slate-400">kubernetes.container_name</code>,{' '}
-                <code className="text-slate-400">json_payload</code> columns.
-                <br />You can also drag & drop the file.
-              </p>
+              <p className="text-slate-300 font-medium mb-2">Load logs to start exploring</p>
+              <div className="text-sm text-slate-500 space-y-1 max-w-sm text-left">
+                <p><span className="text-slate-400 font-medium">CSV file</span> — export from OpenSearch Discover</p>
+                <p><span className="text-slate-400 font-medium">JSON file</span> — save curl response to <code className="text-slate-400">.json</code> and drop it</p>
+                <p><span className="text-slate-400 font-medium">Connect</span> — paste session cookie to query live</p>
+              </div>
             </div>
           </div>
         ) : filteredLogs.length === 0 ? (

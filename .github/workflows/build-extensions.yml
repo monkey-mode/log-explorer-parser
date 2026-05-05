@@ -1,0 +1,72 @@
+name: Build Extensions
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Cookie Bridge (no build step — pure HTML/JS) ─────────────────────
+      - name: Zip Cookie Bridge
+        run: |
+          cd cookie-bridge
+          zip -r ../cookie-bridge.zip . -x "*.DS_Store"
+
+      # ── Log Explorer Extension ────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Install extension deps
+        working-directory: extension
+        run: npm ci
+
+      - name: Build Log Explorer extension
+        working-directory: extension
+        run: npm run build
+
+      - name: Zip Log Explorer extension
+        run: |
+          cd extension/dist
+          zip -r ../../log-explorer-extension.zip .
+
+      # ── Create / update GitHub Release ───────────────────────────────────
+      - name: Delete existing latest release
+        run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release with extension ZIPs
+        run: |
+          gh release create latest \
+            --title "Chrome Extensions — latest build" \
+            --notes "$(cat <<'EOF'
+          ## Chrome Extensions
+
+          ### Cookie Bridge
+          Reads cookies + search state from the OpenSearch Dashboards tab and sends them to the Log Explorer web app — no manual copy-paste needed.
+
+          **Install:** Download `cookie-bridge.zip` → unzip → open `chrome://extensions` → Enable Developer mode → Load unpacked → select the unzipped folder.
+
+          ### Log Explorer Extension
+          Side-panel log explorer that reads directly from the OSD Discover tab.
+
+          **Install:** Same steps with `log-explorer-extension.zip`.
+          EOF
+          )" \
+            --prerelease \
+            cookie-bridge.zip \
+            log-explorer-extension.zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
