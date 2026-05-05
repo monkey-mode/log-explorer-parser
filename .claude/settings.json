@@ -6,7 +6,8 @@
       "Bash(npx --yes create-next-app@latest log-explorer --typescript --tailwind --app --no-eslint --import-alias \"@/*\" --src-dir)",
       "Bash(npm install:*)",
       "Bash(node /Users/ytwok/dev/project/log-explorer-parser/node_modules/typescript/lib/tsc.js --noEmit)",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(node -e \"const c = require\\('@types/chrome'\\); console.log\\('ok'\\)\")"
     ]
   }
 }

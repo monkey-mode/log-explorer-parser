@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import type { LogEntry } from '@/lib/logTypes';
-import { LogRow } from '@/components/LogRow';
+import { LogRow } from './LogRow';
 import { getActiveTab, injectPageHook, readPageData } from '../lib/opensearch';
 
 interface Props {

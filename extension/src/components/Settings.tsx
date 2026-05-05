@@ -5,9 +5,10 @@ import { saveConfig, testConnection, getActiveTab, DEFAULT_CONFIG } from '../lib
 interface Props {
   initial: Partial<OSConfig>;
   onSaved: (config: OSConfig) => void;
+  onCancel?: () => void;
 }
 
-export function Settings({ initial, onSaved }: Props) {
+export function Settings({ initial, onSaved, onCancel }: Props) {
   const [form, setForm] = useState<Partial<OSConfig>>({ ...DEFAULT_CONFIG, ...initial });
   const [tabOrigin, setTabOrigin] = useState('');
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -136,6 +137,14 @@ export function Settings({ initial, onSaved }: Props) {
         )}
 
         <div className="flex gap-2 pt-1">
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              className="px-3 py-2 text-xs rounded-md border border-slate-700 bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            >
+              ← Back
+            </button>
+          )}
           <button
             onClick={handleTest}
             disabled={testing}
