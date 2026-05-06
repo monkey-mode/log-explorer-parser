@@ -117,11 +117,13 @@ async function fetchLogs(origin, params) {
     params: {
       index,
       body: {
+        sort: [{ '@timestamp': { order: 'desc', unmapped_type: 'boolean' } }],
         size: 500,
         version: true,
         stored_fields: ['*'],
+        script_fields: {},
+        docvalue_fields: [{ field: '@timestamp', format: 'date_time' }],
         _source: { excludes: [] },
-        sort: [{ '@timestamp': { order: 'asc', unmapped_type: 'boolean' } }],
         query: { bool: { must: [], filter: filters, should: [], must_not: [] } },
       },
     },
