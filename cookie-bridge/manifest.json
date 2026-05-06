@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Log Explorer — Cookie Bridge",
   "version": "1.0.0",
-  "description": "Sends session cookies from the current tab to the Log Explorer web app at localhost:3000.",
-  "permissions": ["cookies", "tabs", "activeTab"],
+  "description": "Fetches logs from OSD in your browser and sends them to the Log Explorer web app.",
+  "permissions": ["tabs", "activeTab"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",

@@ -1,11 +1,11 @@
 interface ExtState {
-  cookie: string;
   baseUrl: string;
   indexPattern: string | null;
   indexPatternId: string | null;
   timeFrom: string;
   timeTo: string;
   containers: string[];
+  hits: unknown[];
   ts: number;
 }
 
@@ -24,15 +24,15 @@ export async function OPTIONS() {
 
 export async function POST(request: Request) {
   const body = (await request.json()) as Partial<ExtState>;
-  if (!body.cookie) return Response.json({ error: 'cookie required' }, { status: 400, headers: CORS });
+  if (!Array.isArray(body.hits)) return Response.json({ error: 'hits array required' }, { status: 400, headers: CORS });
   stored = {
-    cookie:         body.cookie,
     baseUrl:        body.baseUrl        ?? '',
     indexPattern:   body.indexPattern   ?? null,
     indexPatternId: body.indexPatternId ?? null,
     timeFrom:       body.timeFrom       ?? 'now-1h',
     timeTo:         body.timeTo         ?? 'now',
     containers:     body.containers     ?? [],
+    hits:           body.hits,
     ts: Date.now(),
   };
   return Response.json({ ok: true }, { headers: CORS });

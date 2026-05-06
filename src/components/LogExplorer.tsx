@@ -134,7 +134,6 @@ async function proxyFetch(url: string, body: unknown, cookie: string): Promise<u
 }
 
 interface ExtData {
-  cookie: string;
   baseUrl: string;
   indexPattern: string | null;
   indexPatternId: string | null;
@@ -147,19 +146,16 @@ function ConnectPanel({ onLogs }: ConnectPanelProps) {
   const [tab, setTab] = useState<'ext' | 'curl'>('ext');
 
   // ── Extension tab state ──
-  const [extData,    setExtData]    = useState<ExtData | null>(null);
-  const [extIndex,   setExtIndex]   = useState('logs-*');
-  const [extSize,    setExtSize]    = useState(500);
-  const [extLoading, setExtLoading] = useState(false);
-  const [extErr,     setExtErr]     = useState('');
+  const [extData,  setExtData]  = useState<ExtData | null>(null);
+  const [extErr,   setExtErr]   = useState('');
+  const lastExtTsRef = useRef<number>(0);
 
   const checkExtCookie = useCallback(async () => {
     try {
       const res  = await fetch('/api/ext-cookie');
-      const data = await res.json() as { cookie: string | null } & Partial<ExtData>;
-      if (data.cookie) {
+      const data = await res.json() as { hits?: unknown[]; ts?: number } & Partial<ExtData>;
+      if (Array.isArray(data.hits) && data.hits.length > 0) {
         const d: ExtData = {
-          cookie:         data.cookie,
           baseUrl:        data.baseUrl        ?? '',
           indexPattern:   data.indexPattern   ?? null,
           indexPatternId: data.indexPatternId ?? null,
@@ -168,14 +164,18 @@ function ConnectPanel({ onLogs }: ConnectPanelProps) {
           containers:     data.containers     ?? [],
         };
         setExtData(d);
-        // Auto-fill index if resolved
-        if (d.indexPattern) setExtIndex(d.indexPattern);
         setExtErr('');
+        // Auto-display logs when new data arrives
+        if (data.ts && data.ts !== lastExtTsRef.current) {
+          lastExtTsRef.current = data.ts;
+          const logs = parseOSResponse({ rawResponse: { hits: { hits: data.hits } } });
+          if (logs.length > 0) onLogs(logs, `${d.indexPattern ?? 'OSD'} (Cookie Bridge)`);
+        }
       } else {
         setExtData(null);
       }
     } catch { /* server not ready */ }
-  }, []);
+  }, [onLogs]);
 
   useEffect(() => {
     if (tab === 'ext' && !extData) {
@@ -184,50 +184,6 @@ function ConnectPanel({ onLogs }: ConnectPanelProps) {
       return () => clearInterval(id);
     }
   }, [tab, extData, checkExtCookie]);
-
-  const fetchExt = async () => {
-    if (!extData) return;
-    setExtLoading(true);
-    setExtErr('');
-    try {
-      const endpoint = `${extData.baseUrl}/internal/search/opensearch-with-long-numerals`;
-
-      const containerFilter = extData.containers.length > 0 ? {
-        bool: {
-          minimum_should_match: 1,
-          should: extData.containers.map(c => ({ match_phrase: { 'kubernetes.container_name': c } })),
-        },
-      } : null;
-
-      const filters: object[] = [
-        { match_all: {} },
-        ...(containerFilter ? [containerFilter] : []),
-        { range: { '@timestamp': { gte: extData.timeFrom, lte: extData.timeTo, format: 'strict_date_optional_time' } } },
-      ];
-
-      const body = {
-        params: {
-          index: extIndex,
-          body: {
-            size: extSize,
-            version: true,
-            stored_fields: ['*'],
-            _source: { excludes: [] as string[] },
-            sort: [{ '@timestamp': { order: 'asc', unmapped_type: 'boolean' } }],
-            query: { bool: { must: [], filter: filters, should: [], must_not: [] } },
-          },
-        },
-      };
-      const data = await proxyFetch(endpoint, body, extData.cookie);
-      const logs = parseOSResponse(data);
-      if (logs.length === 0) throw new Error('No hits — check index pattern or time range.');
-      onLogs(logs, `${extIndex} (live)`);
-    } catch (e) {
-      setExtErr((e as Error).message);
-    } finally {
-      setExtLoading(false);
-    }
-  };
 
   // ── cURL tab state ──
   const [curlText, setCurlText] = useState(() =>
@@ -296,52 +252,29 @@ function ConnectPanel({ onLogs }: ConnectPanelProps) {
               <div className="flex flex-col gap-1 px-2.5 py-1.5 bg-green-950/40 border border-green-800/50 rounded text-[11px]">
                 <div className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
-                  <span className="text-green-300 font-medium">Cookie received</span>
+                  <span className="text-green-300 font-medium">Logs received</span>
                   <span className="text-green-600 truncate">{extData.baseUrl}</span>
-                  <button onClick={checkExtCookie} className="ml-auto text-green-600 hover:text-green-400">↻</button>
+                  <button onClick={checkExtCookie} className="ml-auto text-green-600 hover:text-green-400" title="Re-check">↻</button>
                 </div>
+                {extData.indexPattern && (
+                  <div className="text-slate-500 pl-3.5 text-[10px] font-mono">{extData.indexPattern}</div>
+                )}
                 {extData.containers.length > 0 && (
                   <div className="text-slate-500 pl-3.5 text-[10px] truncate">
                     svcs: {extData.containers.join(', ')}
                   </div>
                 )}
                 <div className="text-slate-500 pl-3.5 text-[10px]">
-                  time: {extData.timeFrom} → {extData.timeTo}
+                  {extData.timeFrom} → {extData.timeTo}
                 </div>
               </div>
             ) : (
               <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-800/60 border border-slate-700 rounded text-[11px] text-slate-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-slate-600 shrink-0 animate-pulse" />
-                Waiting for Cookie Bridge extension… click its icon on the OSD tab
+                Waiting for Cookie Bridge… click its icon on the OSD tab then Send
               </div>
             )}
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500 w-12 shrink-0 text-right">Index</span>
-              <input
-                value={extIndex}
-                onChange={(e) => setExtIndex(e.target.value)}
-                placeholder="logs-*"
-                className="w-48 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 outline-none focus:border-blue-500 font-mono text-[11px]"
-              />
-              <span className="text-slate-500 w-8 shrink-0 text-right">Size</span>
-              <input
-                type="number"
-                value={extSize}
-                onChange={(e) => setExtSize(Number(e.target.value))}
-                min={1} max={10000}
-                className="w-20 px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 outline-none focus:border-blue-500 font-mono text-[11px]"
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={fetchExt}
-                disabled={extLoading || !extData}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded font-semibold transition-colors"
-              >
-                {extLoading ? 'Fetching…' : 'Fetch logs'}
-              </button>
-              {extErr && <span className="text-red-400">{extErr}</span>}
-            </div>
+            {extErr && <span className="text-red-400 text-[11px]">{extErr}</span>}
           </>
         )}
 

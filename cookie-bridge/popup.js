@@ -93,31 +93,79 @@ function renderInfo(p, indexPattern) {
 
 init();
 
+// ── Fetch logs directly from OSD (runs in browser → VPN-aware, no proxy) ──
+
+async function fetchLogs(origin, params) {
+  const index = params.indexPattern ?? 'logs-*';
+
+  const containerFilter = params.containers.length > 0 ? {
+    bool: {
+      minimum_should_match: 1,
+      should: params.containers.map(c => ({
+        match_phrase: { 'kubernetes.container_name': c },
+      })),
+    },
+  } : null;
+
+  const filters = [
+    { match_all: {} },
+    ...(containerFilter ? [containerFilter] : []),
+    { range: { '@timestamp': { gte: params.timeFrom, lte: params.timeTo, format: 'strict_date_optional_time' } } },
+  ];
+
+  const body = {
+    params: {
+      index,
+      body: {
+        size: 500,
+        version: true,
+        stored_fields: ['*'],
+        _source: { excludes: [] },
+        sort: [{ '@timestamp': { order: 'asc', unmapped_type: 'boolean' } }],
+        query: { bool: { must: [], filter: filters, should: [], must_not: [] } },
+      },
+    },
+  };
+
+  const r = await fetch(`${origin}/internal/search/opensearch-with-long-numerals`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'osd-xsrf': 'osd-fetch' },
+    body: JSON.stringify(body),
+  });
+
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(`OSD ${r.status}: ${text.slice(0, 120)}`);
+  }
+  const data = await r.json();
+  return data.rawResponse?.hits?.hits ?? [];
+}
+
 // ── Send ──────────────────────────────────────────────────────────────────
 
 sendBtn.addEventListener('click', async () => {
   sendBtn.disabled = true;
-  sendBtn.textContent = 'Sending…';
-  setStatus('');
+  sendBtn.textContent = 'Fetching…';
+  setStatus('Querying OSD…');
 
   try {
     if (!currentTab?.url) throw new Error('No active tab URL.');
 
-    const cookies = await chrome.cookies.getAll({ url: currentTab.url });
-    if (cookies.length === 0) throw new Error('No cookies found for this tab.');
+    const origin  = new URL(currentTab.url).origin;
+    const webBase = webUrlEl.value.replace(/\/$/, '');
 
-    const cookieStr  = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-    const origin     = new URL(currentTab.url).origin;
-    const webBase    = webUrlEl.value.replace(/\/$/, '');
+    // Fetch logs from OSD in the browser (VPN-accessible, no server proxy needed)
+    const hits = await fetchLogs(origin, parsedParams ?? { indexPattern: null, timeFrom: 'now-1h', timeTo: 'now', containers: [] });
 
     const payload = {
-      cookie:       cookieStr,
-      baseUrl:      origin,
-      indexPattern: parsedParams?.indexPattern ?? null,
+      baseUrl:        origin,
+      indexPattern:   parsedParams?.indexPattern   ?? null,
       indexPatternId: parsedParams?.indexPatternId ?? null,
-      timeFrom:     parsedParams?.timeFrom ?? 'now-1h',
-      timeTo:       parsedParams?.timeTo ?? 'now',
-      containers:   parsedParams?.containers ?? [],
+      timeFrom:       parsedParams?.timeFrom       ?? 'now-1h',
+      timeTo:         parsedParams?.timeTo         ?? 'now',
+      containers:     parsedParams?.containers     ?? [],
+      hits,
     };
 
     const res = await fetch(`${webBase}/api/ext-cookie`, {
@@ -128,10 +176,10 @@ sendBtn.addEventListener('click', async () => {
 
     if (!res.ok) throw new Error(`Web app error: ${(await res.text()).slice(0, 100)}`);
 
-    sendBtn.textContent = '✓ Sent';
+    sendBtn.textContent = `✓ ${hits.length} logs sent`;
     sendBtn.className = 'btn ok';
     const cnt = parsedParams?.containers?.length ?? 0;
-    setStatus(`${cookies.length} cookies · ${cnt} service filter${cnt !== 1 ? 's' : ''}`, 'ok');
+    setStatus(`${hits.length} logs · ${cnt} service filter${cnt !== 1 ? 's' : ''}`, 'ok');
 
     // Open / focus the web app tab
     const existing = await chrome.tabs.query({ url: `${webBase}/*` });

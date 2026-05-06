@@ -20,6 +20,15 @@ export async function POST(request: Request) {
       body: JSON.stringify(body),
     });
 
+    const ct = upstream.headers.get('content-type') ?? '';
+    if (!ct.includes('application/json')) {
+      const text = await upstream.text();
+      const preview = text.slice(0, 200).replace(/\s+/g, ' ').trim();
+      return Response.json(
+        { error: `OSD returned non-JSON (${upstream.status}): ${preview}` },
+        { status: 502 },
+      );
+    }
     const data = await upstream.json();
     return Response.json(data, { status: upstream.status });
   } catch (e) {
