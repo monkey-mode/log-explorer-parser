@@ -29,7 +29,7 @@ function parseOSDHash(tabUrl) {
     // rison encodes array as !(...) — extract what's between !( and )
     const paramsMatch = hash.match(/params:!\(([^)]+)\)/);
     const containers  = paramsMatch
-      ? paramsMatch[1].split(',').map(s => s.trim()).filter(Boolean)
+      ? paramsMatch[1].split(',').map(s => s.trim().replace(/^'|'$/g, '')).filter(Boolean)
       : [];
 
     return { timeFrom, timeTo, indexPatternId, containers };
@@ -171,14 +171,11 @@ sendBtn.addEventListener('click', async () => {
       ts: Date.now(),
     });
 
-    // Find or open the web app tab
+    // Find or open the web app tab (but don't focus yet — focusing closes this popup)
     const existing = await chrome.tabs.query({ url: `${webBase}/*` });
     let webTab = existing[0] ?? null;
 
-    if (webTab) {
-      await chrome.tabs.update(webTab.id, { active: true });
-      await chrome.windows.update(webTab.windowId, { focused: true });
-    } else {
+    if (!webTab) {
       webTab = await new Promise((resolve) => {
         chrome.tabs.create({ url: webBase }, (tab) => {
           chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
@@ -191,12 +188,16 @@ sendBtn.addEventListener('click', async () => {
       });
     }
 
-    // Write hits directly to web app's localStorage — no server, no polling
+    // Write to localStorage BEFORE focusing — focusing closes the popup mid-flight
     await chrome.scripting.executeScript({
       target: { tabId: webTab.id },
       func: (data) => localStorage.setItem('ext_logs', data),
       args: [payload],
     });
+
+    // Now safe to focus
+    await chrome.tabs.update(webTab.id, { active: true });
+    await chrome.windows.update(webTab.windowId, { focused: true });
 
     sendBtn.textContent = `✓ ${hits.length} logs sent`;
     sendBtn.className = 'btn ok';
