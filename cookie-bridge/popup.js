@@ -56,30 +56,14 @@ async function resolveIndexPattern(origin, patternId) {
   } catch { return null; }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────
+// ── Session state ──────────────────────────────────────────────────────────
 
-let currentTab   = null;
-let parsedParams = null;
-
-async function init() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  currentTab = tab;
-  if (!tab?.url) return;
-
-  try { fromUrlEl.textContent = new URL(tab.url).origin; } catch { fromUrlEl.textContent = tab.url; }
-
-  const origin = new URL(tab.url).origin;
-  parsedParams = parseOSDHash(tab.url);
-  renderInfo(parsedParams, null); // show immediately without index name
-
-  // Resolve index pattern name in background — direct fetch with session cookies
-  const indexPattern = await resolveIndexPattern(origin, parsedParams.indexPatternId);
-  parsedParams.indexPattern = indexPattern;
-  renderInfo(parsedParams, indexPattern);
-}
+let currentTab    = null;
+let parsedParams  = null;
+let osdOrigin     = null; // the OSD origin to fetch from (may differ from active tab)
 
 function renderInfo(p, indexPattern) {
-  if (!p.indexPatternId && p.containers.length === 0) {
+  if (!p || (!p.indexPatternId && p.containers.length === 0)) {
     infoEl.innerHTML = '<span class="dim">No OSD search state found in URL</span>';
     return;
   }
@@ -89,6 +73,60 @@ function renderInfo(p, indexPattern) {
     <div class="info-row"><span class="key">time </span><span class="val">${p.timeFrom} → ${p.timeTo}</span></div>
     ${p.containers.length ? `<div class="info-row"><span class="key">svcs </span><span class="val dim">${p.containers.join(', ')}</span></div>` : ''}
   `;
+}
+
+async function loadFromTab(tab) {
+  const origin = new URL(tab.url).origin;
+  const params = parseOSDHash(tab.url);
+
+  if (params.indexPatternId || params.containers.length > 0) {
+    // Current tab is an OSD tab with active search state — use it
+    osdOrigin = origin;
+    parsedParams = params;
+    fromUrlEl.textContent = origin;
+    renderInfo(params, null);
+    const indexPattern = await resolveIndexPattern(origin, params.indexPatternId);
+    parsedParams.indexPattern = indexPattern;
+    renderInfo(params, indexPattern);
+    return true;
+  }
+  return false;
+}
+
+async function loadFromStorage() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('lastSession', ({ lastSession }) => {
+      if (!lastSession) return resolve(false);
+      osdOrigin    = lastSession.origin;
+      parsedParams = lastSession.params;
+      fromUrlEl.textContent = lastSession.origin;
+      renderInfo(parsedParams, parsedParams.indexPattern);
+      sendBtn.textContent = 'Refresh logs';
+      setStatus('Using last session — open OSD tab to pick up new search state', '');
+      resolve(true);
+    });
+  });
+}
+
+async function init() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  currentTab = tab;
+
+  // Load stored web app URL
+  chrome.storage.local.get('webBase', ({ webBase }) => {
+    if (webBase) webUrlEl.value = webBase;
+  });
+
+  if (tab?.url) {
+    try {
+      const isOsd = await loadFromTab(tab);
+      if (!isOsd) await loadFromStorage();
+    } catch {
+      await loadFromStorage();
+    }
+  } else {
+    await loadFromStorage();
+  }
 }
 
 init();
@@ -152,10 +190,11 @@ sendBtn.addEventListener('click', async () => {
   setStatus('Querying OSD…');
 
   try {
-    if (!currentTab?.url) throw new Error('No active tab URL.');
+    if (!osdOrigin) throw new Error('No OSD session — open OSD tab first.');
 
-    const origin  = new URL(currentTab.url).origin;
+    const origin  = osdOrigin;
     const webBase = webUrlEl.value.replace(/\/$/, '');
+    chrome.storage.local.set({ webBase });
 
     // Fetch logs from OSD in the browser (VPN-accessible, no server proxy needed)
     const hits = await fetchLogs(origin, parsedParams ?? { indexPattern: null, timeFrom: 'now-1h', timeTo: 'now', containers: [] });
@@ -199,10 +238,13 @@ sendBtn.addEventListener('click', async () => {
     await chrome.tabs.update(webTab.id, { active: true });
     if (webTab.windowId) await chrome.windows.update(webTab.windowId, { focused: true });
 
+    // Persist session so future popup opens can refresh without being on OSD tab
+    chrome.storage.local.set({ lastSession: { origin, params: parsedParams } });
+
     sendBtn.textContent = `✓ ${hits.length} logs sent`;
     sendBtn.className = 'btn ok';
     const cnt = parsedParams?.containers?.length ?? 0;
-    setStatus(`${hits.length} logs · ${cnt} service filter${cnt !== 1 ? 's' : ''}`, 'ok');
+    setStatus(`${hits.length} logs · ${cnt} filter${cnt !== 1 ? 's' : ''}`, 'ok');
 
   } catch (e) {
     sendBtn.textContent = 'Send to Log Explorer';

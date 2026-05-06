@@ -3,7 +3,7 @@
   "name": "Log Explorer — Cookie Bridge",
   "version": "1.0.0",
   "description": "Fetches logs from OSD in your browser and sends them to the Log Explorer web app.",
-  "permissions": ["tabs", "activeTab", "scripting"],
+  "permissions": ["tabs", "activeTab", "scripting", "storage"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
