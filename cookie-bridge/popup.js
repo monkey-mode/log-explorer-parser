@@ -18,8 +18,8 @@ function parseOSDHash(tabUrl) {
 
     // Time range from _g: time:(from:now-1w,to:now)
     const timeMatch = hash.match(/time:\(from:([^,)]+),to:([^)&,]+)/);
-    const timeFrom  = timeMatch?.[1]?.trim() ?? 'now-1h';
-    const timeTo    = timeMatch?.[2]?.trim() ?? 'now';
+    const timeFrom  = (timeMatch?.[1]?.trim() ?? 'now-1h').replace(/^'|'$/g, '');
+    const timeTo    = (timeMatch?.[2]?.trim() ?? 'now').replace(/^'|'$/g, '');
 
     // Index pattern UUID from _a: metadata:(indexPattern:uuid,view:...)
     const idMatch       = hash.match(/indexPattern:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
