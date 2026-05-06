@@ -118,8 +118,18 @@ function parseCurl(raw: string): ParsedCurl | null {
 
 const LS_CURL = 'os_proxy_curl';
 
+interface ExtData {
+  baseUrl: string;
+  indexPattern: string | null;
+  indexPatternId: string | null;
+  timeFrom: string;
+  timeTo: string;
+  containers: string[];
+}
+
 interface ConnectPanelProps {
   onLogs: (logs: LogEntry[], label: string) => void;
+  extData: ExtData | null;
 }
 
 async function proxyFetch(url: string, body: unknown, cookie: string): Promise<unknown> {
@@ -133,65 +143,13 @@ async function proxyFetch(url: string, body: unknown, cookie: string): Promise<u
   return data;
 }
 
-interface ExtData {
-  baseUrl: string;
-  indexPattern: string | null;
-  indexPatternId: string | null;
-  timeFrom: string;
-  timeTo: string;
-  containers: string[];
-}
-
-function ConnectPanel({ onLogs }: ConnectPanelProps) {
-  const [tab, setTab] = useState<'ext' | 'curl'>('ext');
-
-  // ── Extension tab state ──
-  const [extData,  setExtData]  = useState<ExtData | null>(null);
-  const [extErr,   setExtErr]   = useState('');
-  const lastExtTsRef = useRef<number>(0);
-
-  const checkExtCookie = useCallback(async () => {
-    try {
-      const res  = await fetch('/api/ext-cookie');
-      const data = await res.json() as { hits?: unknown[]; ts?: number } & Partial<ExtData>;
-      if (Array.isArray(data.hits) && data.hits.length > 0) {
-        const d: ExtData = {
-          baseUrl:        data.baseUrl        ?? '',
-          indexPattern:   data.indexPattern   ?? null,
-          indexPatternId: data.indexPatternId ?? null,
-          timeFrom:       data.timeFrom       ?? 'now-1h',
-          timeTo:         data.timeTo         ?? 'now',
-          containers:     data.containers     ?? [],
-        };
-        setExtData(d);
-        setExtErr('');
-        // Auto-display logs when new data arrives
-        if (data.ts && data.ts !== lastExtTsRef.current) {
-          lastExtTsRef.current = data.ts;
-          const logs = parseOSResponse({ rawResponse: { hits: { hits: data.hits } } });
-          if (logs.length > 0) onLogs(logs, `${d.indexPattern ?? 'OSD'} (Cookie Bridge)`);
-        }
-      } else {
-        setExtData(null);
-      }
-    } catch { /* server not ready */ }
-  }, [onLogs]);
-
-  useEffect(() => {
-    if (tab === 'ext' && !extData) {
-      checkExtCookie();
-      const id = setInterval(checkExtCookie, 3000);
-      return () => clearInterval(id);
-    }
-  }, [tab, extData, checkExtCookie]);
-
-  // ── cURL tab state ──
+function ConnectPanel({ onLogs, extData }: ConnectPanelProps) {
   const [curlText, setCurlText] = useState(() =>
     typeof window !== 'undefined' ? localStorage.getItem(LS_CURL) ?? '' : ''
   );
   const [curlLoading, setCurlLoading] = useState(false);
-  const [curlErr, setCurlErr]   = useState('');
-  const [parsed, setParsed]     = useState<ParsedCurl | null>(null);
+  const [curlErr, setCurlErr] = useState('');
+  const [parsed, setParsed]   = useState<ParsedCurl | null>(null);
 
   const onPaste = (text: string) => {
     setCurlText(text);
@@ -219,96 +177,77 @@ function ConnectPanel({ onLogs }: ConnectPanelProps) {
     }
   };
 
-  const tabCls = (t: 'ext' | 'curl') =>
-    `px-3 py-1 text-[11px] font-medium rounded-t border-b-2 transition-colors ${
-      tab === t ? 'border-blue-500 text-blue-300' : 'border-transparent text-slate-500 hover:text-slate-300'
-    }`;
-
   return (
     <div className="bg-slate-900 border-b border-slate-700 flex flex-col text-xs">
-      {/* Tabs */}
-      <div className="flex items-center gap-1 px-4 pt-2 border-b border-slate-800">
-        <button className={tabCls('ext')}  onClick={() => setTab('ext')}>Cookie Bridge</button>
-        <button className={tabCls('curl')} onClick={() => setTab('curl')}>Paste cURL</button>
+      <div className="flex items-center gap-2 px-4 pt-2.5 pb-2 border-b border-slate-800">
+        <span className="text-[11px] font-semibold text-slate-400 flex-1">Load logs</span>
         <a
           href="https://github.com/monkey-mode/log-explorer-parser/releases/tag/latest"
           target="_blank"
           rel="noreferrer"
-          className="ml-auto mb-1.5 flex items-center gap-1 px-2 py-0.5 text-[10px] rounded border border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300 transition-colors"
+          className="flex items-center gap-1 px-2 py-0.5 text-[10px] rounded border border-slate-700 text-slate-500 hover:border-slate-500 hover:text-slate-300 transition-colors"
         >
           <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="17 8 12 3 7 8"/>
             <line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          Download (.zip)
+          Cookie Bridge (.zip)
         </a>
       </div>
 
-      <div className="px-4 py-3 flex flex-col gap-2">
-        {tab === 'ext' && (
-          <>
-            {extData ? (
-              <div className="flex flex-col gap-1 px-2.5 py-1.5 bg-green-950/40 border border-green-800/50 rounded text-[11px]">
-                <div className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
-                  <span className="text-green-300 font-medium">Logs received</span>
-                  <span className="text-green-600 truncate">{extData.baseUrl}</span>
-                  <button onClick={checkExtCookie} className="ml-auto text-green-600 hover:text-green-400" title="Re-check">↻</button>
-                </div>
-                {extData.indexPattern && (
-                  <div className="text-slate-500 pl-3.5 text-[10px] font-mono">{extData.indexPattern}</div>
-                )}
-                {extData.containers.length > 0 && (
-                  <div className="text-slate-500 pl-3.5 text-[10px] truncate">
-                    svcs: {extData.containers.join(', ')}
-                  </div>
-                )}
-                <div className="text-slate-500 pl-3.5 text-[10px]">
-                  {extData.timeFrom} → {extData.timeTo}
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-800/60 border border-slate-700 rounded text-[11px] text-slate-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-slate-600 shrink-0 animate-pulse" />
-                Waiting for Cookie Bridge… click its icon on the OSD tab then Send
-              </div>
+      <div className="px-4 py-3 flex flex-col gap-3">
+        {/* Cookie Bridge status */}
+        {extData ? (
+          <div className="flex flex-col gap-1 px-2.5 py-1.5 bg-green-950/40 border border-green-800/50 rounded text-[11px]">
+            <div className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
+              <span className="text-green-300 font-medium">Cookie Bridge active</span>
+              <span className="text-green-700 truncate text-[10px]">{extData.baseUrl}</span>
+            </div>
+            {extData.indexPattern && (
+              <div className="text-slate-500 pl-3.5 text-[10px] font-mono">{extData.indexPattern}</div>
             )}
-            {extErr && <span className="text-red-400 text-[11px]">{extErr}</span>}
-          </>
+            {extData.containers.length > 0 && (
+              <div className="text-slate-500 pl-3.5 text-[10px] truncate">svcs: {extData.containers.join(', ')}</div>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 px-2.5 py-1.5 bg-slate-800/60 border border-slate-700 rounded text-[11px] text-slate-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-600 shrink-0 animate-pulse" />
+            Cookie Bridge: open OSD tab → click extension icon → Send
+          </div>
         )}
 
-        {tab === 'curl' && (
-          <>
-            <div className="text-slate-500">
-              DevTools → Network → right-click request →{' '}
-              <span className="text-slate-300 font-medium">Copy as cURL</span> → paste below
-            </div>
-            <textarea
-              value={curlText}
-              onChange={(e) => onPaste(e.target.value)}
-              placeholder={"curl 'https://logging-nonprd.gcp.ktbapp.tech/internal/search/...' \\\n  -b 'cookie...' \\\n  --data-raw '{...}'"}
-              rows={5}
-              className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 outline-none focus:border-blue-500 font-mono text-[10px] resize-y leading-relaxed"
-            />
-            {parsed && (
-              <div className="flex gap-4 text-[10px] text-slate-500 font-mono">
-                <span><span className="text-slate-600">cookie </span><span className={parsed.cookie ? 'text-green-400' : 'text-red-400'}>{parsed.cookie ? `${parsed.cookie.length} chars ✓` : 'not found'}</span></span>
-                <span><span className="text-slate-600">body </span><span className={parsed.body ? 'text-green-400' : 'text-yellow-400'}>{parsed.body ? 'parsed ✓' : 'not found'}</span></span>
-              </div>
-            )}
-            <div className="flex items-center gap-3">
-              <button
-                onClick={fetchCurl}
-                disabled={curlLoading || !curlText.trim()}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded font-semibold transition-colors"
-              >
-                {curlLoading ? 'Fetching…' : 'Fetch logs'}
-              </button>
-              {curlErr && <span className="text-red-400">{curlErr}</span>}
-            </div>
-          </>
+        {/* cURL fallback */}
+        <div className="flex items-center gap-2 text-[10px] text-slate-600">
+          <div className="flex-1 h-px bg-slate-800" />
+          or paste a cURL command (runs via server proxy)
+          <div className="flex-1 h-px bg-slate-800" />
+        </div>
+        <textarea
+          value={curlText}
+          onChange={(e) => onPaste(e.target.value)}
+          placeholder={"curl 'https://logging-nonprd.gcp.ktbapp.tech/internal/search/...' \\\n  -b 'cookie...' \\\n  --data-raw '{...}'"}
+          rows={4}
+          className="w-full px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded text-slate-200 placeholder-slate-600 outline-none focus:border-blue-500 font-mono text-[10px] resize-y leading-relaxed"
+        />
+        {parsed && (
+          <div className="flex gap-4 text-[10px] text-slate-500 font-mono">
+            <span><span className="text-slate-600">cookie </span><span className={parsed.cookie ? 'text-green-400' : 'text-red-400'}>{parsed.cookie ? `${parsed.cookie.length} chars ✓` : 'not found'}</span></span>
+            <span><span className="text-slate-600">body </span><span className={parsed.body ? 'text-green-400' : 'text-yellow-400'}>{parsed.body ? 'parsed ✓' : 'not found'}</span></span>
+          </div>
         )}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={fetchCurl}
+            disabled={curlLoading || !curlText.trim()}
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded font-semibold transition-colors"
+          >
+            {curlLoading ? 'Fetching…' : 'Fetch logs'}
+          </button>
+          {curlErr && <span className="text-red-400">{curlErr}</span>}
+        </div>
       </div>
     </div>
   );
@@ -330,7 +269,8 @@ export function LogExplorer() {
   const [allLogs,  setAllLogs]  = useState<LogEntry[]>([]);
   const [fileName, setFileName] = useState<string>('');
   const [loading,  setLoading]  = useState(false);
-  const [showConnect, setShowConnect] = useState(false);
+  const [extData,  setExtData]  = useState<ExtData | null>(null);
+  const lastExtTsRef = useRef<number>(0);
   const [filters, setFilters] = useState<FilterState>({
     search: '',
     severity: 'ALL',
@@ -379,8 +319,38 @@ export function LogExplorer() {
     setAllLogs(logs.sort((a, b) => a.payloadTs - b.payloadTs));
     setFileName(label);
     setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
-    setShowConnect(false);
   }, []);
+
+  // Always-on Cookie Bridge polling — works regardless of UI state
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res  = await fetch('/api/ext-cookie');
+        const data = await res.json() as { hits?: unknown[]; ts?: number } & Partial<ExtData>;
+        if (Array.isArray(data.hits) && data.hits.length > 0) {
+          const d: ExtData = {
+            baseUrl:        data.baseUrl        ?? '',
+            indexPattern:   data.indexPattern   ?? null,
+            indexPatternId: data.indexPatternId ?? null,
+            timeFrom:       data.timeFrom       ?? 'now-1h',
+            timeTo:         data.timeTo         ?? 'now',
+            containers:     data.containers     ?? [],
+          };
+          setExtData(d);
+          if (data.ts && data.ts !== lastExtTsRef.current) {
+            lastExtTsRef.current = data.ts;
+            const logs = parseOSResponse({ rawResponse: { hits: { hits: data.hits } } });
+            if (logs.length > 0) loadLogs(logs, `${d.indexPattern ?? 'OSD'} (Cookie Bridge)`);
+          }
+        } else {
+          setExtData(null);
+        }
+      } catch { /* server not ready */ }
+    };
+    check();
+    const id = setInterval(check, 3000);
+    return () => clearInterval(id);
+  }, [loadLogs]);
 
   const loadFile = useCallback((file: File) => {
     setLoading(true);
@@ -494,23 +464,11 @@ export function LogExplorer() {
           <input ref={fileInputRef} type="file" accept=".csv,.json,text/csv,application/json" className="hidden" onChange={onFileChange} />
         </label>
 
-        {/* Connect button */}
-        <button
-          onClick={() => setShowConnect((v) => !v)}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border transition-colors ${
-            showConnect
-              ? 'bg-blue-700 border-blue-600 text-white'
-              : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-500 hover:text-white'
-          }`}
-        >
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
-            <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
-            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
-            <line x1="12" y1="20" x2="12.01" y2="20"/>
-          </svg>
-          Connect
-        </button>
+        {/* Cookie Bridge status dot */}
+        <span
+          title={extData ? `Cookie Bridge: ${extData.baseUrl}` : 'Cookie Bridge: waiting…'}
+          className={`w-2 h-2 rounded-full shrink-0 ${extData ? 'bg-green-400' : 'bg-slate-600 animate-pulse'}`}
+        />
 
         {fileName && (
           <span className="text-xs text-slate-500 truncate max-w-[200px]">{fileName}</span>
@@ -527,8 +485,8 @@ export function LogExplorer() {
         {loading && <span className="text-xs text-slate-500 ml-2 animate-pulse">Parsing…</span>}
       </header>
 
-      {/* ── Connect panel ── */}
-      {showConnect && <ConnectPanel onLogs={loadLogs} />}
+      {/* ── Connect panel — shown only when no logs loaded ── */}
+      {allLogs.length === 0 && <ConnectPanel onLogs={loadLogs} extData={extData} />}
 
       {/* ── Filters ── */}
       <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 border-b border-slate-800 shrink-0 flex-wrap">
@@ -593,9 +551,8 @@ export function LogExplorer() {
             <div className="text-center">
               <p className="text-slate-300 font-medium mb-2">Load logs to start exploring</p>
               <div className="text-sm text-slate-500 space-y-1 max-w-sm text-left">
-                <p><span className="text-slate-400 font-medium">CSV file</span> — export from OpenSearch Discover</p>
-                <p><span className="text-slate-400 font-medium">JSON file</span> — save curl response to <code className="text-slate-400">.json</code> and drop it</p>
-                <p><span className="text-slate-400 font-medium">Connect</span> — paste session cookie to query live</p>
+                <p><span className="text-slate-400 font-medium">Cookie Bridge</span> — click the extension on your OSD tab</p>
+                <p><span className="text-slate-400 font-medium">CSV / JSON file</span> — drag and drop, or use Load file</p>
               </div>
             </div>
           </div>
