@@ -5,9 +5,6 @@
   "description": "Fetches logs from OSD in your browser and sends them to the Log Explorer web app.",
   "permissions": ["tabs", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
-  "background": {
-    "service_worker": "background.js"
-  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Send cookies to Log Explorer",

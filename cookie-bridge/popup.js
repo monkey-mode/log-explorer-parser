@@ -188,15 +188,16 @@ sendBtn.addEventListener('click', async () => {
       });
     }
 
-    // Delegate to background service worker — scripting API and tab focus
-    // run there so the popup closing mid-flight doesn't abort anything.
-    const result = await chrome.runtime.sendMessage({
-      type: 'WRITE_LOGS',
-      tabId: webTab.id,
-      windowId: webTab.windowId,
-      payload,
+    // Write to localStorage via scripting, then focus (order matters —
+    // focusing the tab closes this popup, aborting any pending async calls)
+    await chrome.scripting.executeScript({
+      target: { tabId: webTab.id },
+      func: (data) => localStorage.setItem('ext_logs', data),
+      args: [payload],
     });
-    if (!result?.ok) throw new Error(result?.error ?? 'Background write failed');
+
+    await chrome.tabs.update(webTab.id, { active: true });
+    if (webTab.windowId) await chrome.windows.update(webTab.windowId, { focused: true });
 
     sendBtn.textContent = `✓ ${hits.length} logs sent`;
     sendBtn.className = 'btn ok';
