@@ -160,7 +160,7 @@ sendBtn.addEventListener('click', async () => {
     // Fetch logs from OSD in the browser (VPN-accessible, no server proxy needed)
     const hits = await fetchLogs(origin, parsedParams ?? { indexPattern: null, timeFrom: 'now-1h', timeTo: 'now', containers: [] });
 
-    const payload = {
+    const payload = JSON.stringify({
       baseUrl:        origin,
       indexPattern:   parsedParams?.indexPattern   ?? null,
       indexPatternId: parsedParams?.indexPatternId ?? null,
@@ -168,29 +168,40 @@ sendBtn.addEventListener('click', async () => {
       timeTo:         parsedParams?.timeTo         ?? 'now',
       containers:     parsedParams?.containers     ?? [],
       hits,
-    };
-
-    const res = await fetch(`${webBase}/api/ext-cookie`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      ts: Date.now(),
     });
 
-    if (!res.ok) throw new Error(`Web app error: ${(await res.text()).slice(0, 100)}`);
+    // Find or open the web app tab
+    const existing = await chrome.tabs.query({ url: `${webBase}/*` });
+    let webTab = existing[0] ?? null;
+
+    if (webTab) {
+      await chrome.tabs.update(webTab.id, { active: true });
+      await chrome.windows.update(webTab.windowId, { focused: true });
+    } else {
+      webTab = await new Promise((resolve) => {
+        chrome.tabs.create({ url: webBase }, (tab) => {
+          chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+            if (tabId === tab.id && info.status === 'complete') {
+              chrome.tabs.onUpdated.removeListener(listener);
+              resolve(tab);
+            }
+          });
+        });
+      });
+    }
+
+    // Write hits directly to web app's localStorage — no server, no polling
+    await chrome.scripting.executeScript({
+      target: { tabId: webTab.id },
+      func: (data) => localStorage.setItem('ext_logs', data),
+      args: [payload],
+    });
 
     sendBtn.textContent = `✓ ${hits.length} logs sent`;
     sendBtn.className = 'btn ok';
     const cnt = parsedParams?.containers?.length ?? 0;
     setStatus(`${hits.length} logs · ${cnt} service filter${cnt !== 1 ? 's' : ''}`, 'ok');
-
-    // Open / focus the web app tab
-    const existing = await chrome.tabs.query({ url: `${webBase}/*` });
-    if (existing.length > 0) {
-      await chrome.tabs.update(existing[0].id, { active: true });
-      await chrome.windows.update(existing[0].windowId, { focused: true });
-    } else {
-      await chrome.tabs.create({ url: webBase });
-    }
 
   } catch (e) {
     sendBtn.textContent = 'Send to Log Explorer';

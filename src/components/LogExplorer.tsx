@@ -321,12 +321,13 @@ export function LogExplorer() {
     setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
   }, []);
 
-  // Always-on Cookie Bridge polling — works regardless of UI state
+  // Always-on Cookie Bridge check — reads localStorage written by the extension
   useEffect(() => {
-    const check = async () => {
+    const check = () => {
       try {
-        const res  = await fetch('/api/ext-cookie');
-        const data = await res.json() as { hits?: unknown[]; ts?: number } & Partial<ExtData>;
+        const raw = localStorage.getItem('ext_logs');
+        if (!raw) return;
+        const data = JSON.parse(raw) as { hits?: unknown[]; ts?: number } & Partial<ExtData>;
         if (Array.isArray(data.hits) && data.hits.length > 0) {
           const d: ExtData = {
             baseUrl:        data.baseUrl        ?? '',
@@ -342,13 +343,11 @@ export function LogExplorer() {
             const logs = parseOSResponse({ rawResponse: { hits: { hits: data.hits } } });
             if (logs.length > 0) loadLogs(logs, `${d.indexPattern ?? 'OSD'} (Cookie Bridge)`);
           }
-        } else {
-          setExtData(null);
         }
-      } catch { /* server not ready */ }
+      } catch { /* parse error */ }
     };
     check();
-    const id = setInterval(check, 3000);
+    const id = setInterval(check, 500);
     return () => clearInterval(id);
   }, [loadLogs]);
 
