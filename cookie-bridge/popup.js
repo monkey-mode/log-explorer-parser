@@ -21,9 +21,13 @@ function parseOSDHash(tabUrl) {
     const timeFrom  = (timeMatch?.[1]?.trim() ?? 'now-1h').replace(/^'|'$/g, '');
     const timeTo    = (timeMatch?.[2]?.trim() ?? 'now').replace(/^'|'$/g, '');
 
-    // Index pattern UUID from _a: metadata:(indexPattern:uuid,view:...)
-    const idMatch       = hash.match(/indexPattern:([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+    // Index pattern — OSD rison wraps the value in single quotes: indexPattern:'uuid-or-name'
+    const idMatch        = hash.match(/indexPattern:'?([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})'?/);
     const indexPatternId = idMatch?.[1] ?? null;
+
+    // Name-based index pattern (e.g. logs-sag-dev-gke-1-dev*) when no UUID present
+    const nameMatch        = !indexPatternId ? hash.match(/indexPattern:'([^']+)'/) ?? hash.match(/indexPattern:([^,)]+)/) : null;
+    const indexPatternName = nameMatch?.[1]?.trim() ?? null;
 
     // Container names from _q: params:!(name1,name2,...)
     // rison encodes array as !(...) — extract what's between !( and )
@@ -32,9 +36,9 @@ function parseOSDHash(tabUrl) {
       ? paramsMatch[1].split(',').map(s => s.trim().replace(/^'|'$/g, '')).filter(Boolean)
       : [];
 
-    return { timeFrom, timeTo, indexPatternId, containers };
+    return { timeFrom, timeTo, indexPatternId, indexPatternName, containers };
   } catch {
-    return { timeFrom: 'now-1h', timeTo: 'now', indexPatternId: null, containers: [] };
+    return { timeFrom: 'now-1h', timeTo: 'now', indexPatternId: null, indexPatternName: null, containers: [] };
   }
 }
 
@@ -63,7 +67,7 @@ let parsedParams  = null;
 let osdOrigin     = null; // the OSD origin to fetch from (may differ from active tab)
 
 function renderInfo(p, indexPattern) {
-  if (!p || (!p.indexPatternId && p.containers.length === 0)) {
+  if (!p) {
     infoEl.innerHTML = '<span class="dim">No OSD search state found in URL</span>';
     return;
   }
@@ -79,8 +83,9 @@ async function loadFromTab(tab) {
   const origin = new URL(tab.url).origin;
   const params = parseOSDHash(tab.url);
 
-  if (params.indexPatternId || params.containers.length > 0) {
-    // Current tab is an OSD tab with active search state — use it
+  // Accept any OSD tab that has a hash with _g or _a state (time range is always present)
+  const hasOsdHash = tab.url.includes('#') && (tab.url.includes('_g=') || tab.url.includes('_a='));
+  if (hasOsdHash || params.indexPatternId || params.containers.length > 0) {
     osdOrigin = origin;
     parsedParams = params;
     fromUrlEl.textContent = origin;
@@ -134,7 +139,7 @@ init();
 // ── Fetch logs directly from OSD (runs in browser → VPN-aware, no proxy) ──
 
 async function fetchLogs(origin, params) {
-  const index = params.indexPattern ?? 'logs-*';
+  const index = params.indexPattern ?? params.indexPatternName ?? 'logs-*';
 
   const containerFilter = params.containers.length > 0 ? {
     bool: {
