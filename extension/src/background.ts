@@ -4,23 +4,23 @@ function isOsd(url?: string) {
   return typeof url === 'string' && url.startsWith(OSD_ORIGIN);
 }
 
-// Open panel on icon click — only when on the OSD tab.
-chrome.action.onClicked.addListener((tab) => {
-  if (!isOsd(tab.url) || tab.id == null) return;
-  chrome.sidePanel.setOptions({ tabId: tab.id, enabled: true });
-  chrome.sidePanel.open({ tabId: tab.id }).catch(console.error);
+// Chrome opens/closes the panel automatically on icon click when enabled.
+// No manual open() call needed — this avoids the async race with setOptions.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
+
+function syncPanel(tabId: number, url?: string) {
+  chrome.sidePanel.setOptions({ tabId, enabled: isOsd(url) });
+}
+
+// Sync the already-active tab when the service worker starts.
+chrome.tabs.query({ active: true, currentWindow: true }, ([tab]) => {
+  if (tab?.id) syncPanel(tab.id, tab.url);
 });
 
-// Close the panel when the user switches to a non-OSD tab.
+// Enable only for OSD tabs; disable (and close) for everything else.
 chrome.tabs.onActivated.addListener(({ tabId }) => {
-  chrome.tabs.get(tabId, (tab) => {
-    chrome.sidePanel.setOptions({ tabId, enabled: isOsd(tab.url) });
-  });
+  chrome.tabs.get(tabId, (tab) => syncPanel(tabId, tab.url));
 });
-
-// Also track URL changes within a tab (e.g. navigating away from OSD).
 chrome.tabs.onUpdated.addListener((tabId, info) => {
-  if (info.url !== undefined) {
-    chrome.sidePanel.setOptions({ tabId, enabled: isOsd(info.url) });
-  }
+  if (info.url !== undefined) syncPanel(tabId, info.url);
 });
