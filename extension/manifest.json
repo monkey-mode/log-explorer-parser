@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "description": "Reads logs live from the OpenSearch Dashboards search API (opensearch-with-long-numerals) and renders them in a side panel — scoped to the OSD tab only.",
   "permissions": ["sidePanel", "storage", "tabs"],
-  "host_permissions": ["https://logging-nonprd.gcp.ktbapp.tech/*"],
+  "host_permissions": [
+    "https://logging-nonprd.gcp.ktbapp.tech/*",
+    "https://logging-prd.gcp.ktbapp.tech/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -18,13 +21,19 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://logging-nonprd.gcp.ktbapp.tech/*"],
+      "matches": [
+        "https://logging-nonprd.gcp.ktbapp.tech/*",
+        "https://logging-prd.gcp.ktbapp.tech/*"
+      ],
       "js": ["interceptor.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://logging-nonprd.gcp.ktbapp.tech/*"],
+      "matches": [
+        "https://logging-nonprd.gcp.ktbapp.tech/*",
+        "https://logging-prd.gcp.ktbapp.tech/*"
+      ],
       "js": ["relay.js"],
       "run_at": "document_start",
       "world": "ISOLATED"

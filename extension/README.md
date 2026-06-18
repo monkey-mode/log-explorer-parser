@@ -44,10 +44,15 @@ data.
 > After updating the extension, reload it from `chrome://extensions` and reopen
 > the panel so the new (non-global) configuration takes effect.
 
-## Pointing at another OSD host
+## Supported OSD hosts
 
-The host appears in three places — update all of them:
+The extension works on both environments:
+
+- `https://logging-nonprd.gcp.ktbapp.tech`
+- `https://logging-prd.gcp.ktbapp.tech`
+
+To add or change a host, update all three places (then reload the extension):
 
 - `manifest.json` → `host_permissions` and both `content_scripts[].matches`
-- `background.js` → `OSD_HOST`
-- `sidepanel.js` → `OSD_HOST`
+- `background.js` → `OSD_HOSTS`
+- `sidepanel.js` → `OSD_HOSTS`

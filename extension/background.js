@@ -1,11 +1,14 @@
 // Service worker: stores captured OSD data per-tab and scopes the side panel
 // so it is only enabled on OSD tabs (never "traverses" other tabs).
 
-const OSD_HOST = 'logging-nonprd.gcp.ktbapp.tech';
+const OSD_HOSTS = [
+  'logging-nonprd.gcp.ktbapp.tech',
+  'logging-prd.gcp.ktbapp.tech',
+];
 
 function isOsdUrl(url) {
   try {
-    return new URL(url).host === OSD_HOST;
+    return OSD_HOSTS.includes(new URL(url).host);
   } catch (_) {
     return false;
   }

@@ -1,6 +1,9 @@
 'use strict';
 
-const OSD_HOST = 'logging-nonprd.gcp.ktbapp.tech';
+const OSD_HOSTS = [
+  'logging-nonprd.gcp.ktbapp.tech',
+  'logging-prd.gcp.ktbapp.tech',
+];
 const SEV_BUTTONS = ['ALL', 'ERROR', 'WARN', 'INFO', 'DEBUG'];
 
 const state = {
@@ -25,7 +28,7 @@ const el = {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 function isOsdUrl(url) {
-  try { return new URL(url).host === OSD_HOST; } catch (_) { return false; }
+  try { return OSD_HOSTS.includes(new URL(url).host); } catch (_) { return false; }
 }
 
 function escapeHtml(s) {

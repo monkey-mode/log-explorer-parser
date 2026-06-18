@@ -1,4 +1,4 @@
-name: Build Extensions
+name: Build Extension
 
 on:
   push:
@@ -15,35 +15,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Cookie Bridge → .zip (load unpacked) ─────────────────────────────
-      - name: Pack Cookie Bridge as zip
+      # ── OSD Log Explorer → .zip (no build step needed) ───────────────────
+      - name: Validate manifest
         run: |
-          cd cookie-bridge
-          zip -r ../cookie-bridge.zip . -x "*.DS_Store"
-          cd ..
-          ls -lh cookie-bridge.zip
+          node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
+          echo "manifest.json is valid JSON"
 
-      # ── Log Explorer Extension ────────────────────────────────────────────
-      - uses: actions/setup-node@v4
+      - name: Pack extension as zip
+        run: |
+          zip -r osd-log-explorer.zip extension -x "*.DS_Store" "extension/README.md"
+          ls -lh osd-log-explorer.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: extension/package-lock.json
-
-      - name: Install extension deps
-        working-directory: extension
-        run: npm ci
-
-      - name: Build Log Explorer extension
-        working-directory: extension
-        run: npm run build
-
-      - name: Pack Log Explorer as zip
-        run: |
-          cd extension/dist
-          zip -r ../../log-explorer-extension.zip .
-          cd ../..
-          ls -lh log-explorer-extension.zip
+          name: osd-log-explorer
+          path: osd-log-explorer.zip
 
       # ── Create / update GitHub Release ───────────────────────────────────
       - name: Delete existing latest release
@@ -54,23 +41,22 @@ jobs:
       - name: Create GitHub Release
         run: |
           gh release create latest \
-            --title "Chrome Extensions — latest build" \
+            --title "OSD Log Explorer — latest build" \
             --notes "$(cat <<'EOF'
-          ## Chrome Extensions
+          ## OSD Log Explorer (`osd-log-explorer.zip`)
 
-          ### Cookie Bridge (`cookie-bridge.zip`)
-          Reads cookies + search state from the OSD tab and sends them to the Log Explorer web app — no manual copy-paste.
+          Chrome side-panel log viewer that reads logs live from the OpenSearch
+          Dashboards search API (`opensearch-with-long-numerals`). Works on both
+          `logging-nonprd` and `logging-prd`.
 
           **Install:**
-          1. Download and unzip `cookie-bridge.zip` to a permanent folder
+          1. Download and unzip `osd-log-explorer.zip` to a permanent folder
           2. Open `chrome://extensions`
           3. Enable **Developer mode** (top-right toggle)
-          4. Click **Load unpacked** → select the unzipped folder
+          4. Click **Load unpacked** → select the unzipped `extension` folder
 
-          ### Log Explorer (`log-explorer-extension.zip`)
-          Side-panel log explorer that reads directly from the OSD Discover tab.
-
-          **Install:** Same steps with `log-explorer-extension.zip`.
+          **Use:** Open an OSD Discover tab, click the extension icon to open the
+          side panel, then run a search — results appear automatically.
 
           ---
           > Chrome blocks side-loading `.crx` files from outside the Web Store (since Chrome 73).
@@ -78,7 +64,6 @@ jobs:
           EOF
           )" \
             --prerelease \
-            cookie-bridge.zip \
-            log-explorer-extension.zip
+            osd-log-explorer.zip
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
