@@ -129,10 +129,10 @@ function services() {
 
 // ── JSON tree ───────────────────────────────────────────────────────────────
 function buildJson(value, depth) {
-  if (value === null) return span('jv-null', 'null');
+  if (value === null) return leaf('jv-null', 'null', 'null');
   const t = typeof value;
-  if (t === 'boolean') return span('jv-bool', String(value));
-  if (t === 'number') return span('jv-num', String(value));
+  if (t === 'boolean') return leaf('jv-bool', String(value), String(value));
+  if (t === 'number') return leaf('jv-num', String(value), String(value));
 
   if (t === 'string') {
     const trimmed = value.trim();
@@ -145,7 +145,7 @@ function buildJson(value, depth) {
         return wrap;
       } catch (_) { /* not JSON */ }
     }
-    return span('jv-str', '"' + value + '"');
+    return leaf('jv-str', '"' + value + '"', value);
   }
 
   const isArr = Array.isArray(value);
@@ -203,6 +203,91 @@ function span(cls, text) {
   s.className = cls;
   s.textContent = text;
   return s;
+}
+
+// A clickable JSON leaf that copies its raw value to the clipboard.
+function leaf(cls, display, raw) {
+  const s = span(cls + ' jv-leaf', display);
+  s.title = 'Click to copy';
+  s.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(raw).then(() => {
+      s.classList.add('jv-copied');
+      setTimeout(() => s.classList.remove('jv-copied'), 800);
+    });
+  });
+  return s;
+}
+
+// ── stack trace ─────────────────────────────────────────────────────────────
+// Flattened Go stack: "<func> <file>:<line> <func> <file>:<line> …".
+// Functions and paths contain no spaces, so tokens pair up func -> location.
+function parseStack(raw) {
+  const tokens = String(raw).trim().split(/\s+/);
+  const frames = [];
+  let fnParts = [];
+  for (const tok of tokens) {
+    const m = tok.match(/^(.*):(\d+)$/);
+    if (m && (tok.indexOf('/') !== -1 || tok.indexOf('.go') !== -1)) {
+      frames.push({ fn: fnParts.join(' '), file: m[1], line: m[2] });
+      fnParts = [];
+    } else {
+      fnParts.push(tok);
+    }
+  }
+  if (fnParts.length) frames.push({ fn: fnParts.join(' '), file: '', line: '' });
+  return frames;
+}
+
+function decodePkg(s) {
+  return s.replace(/%2e/gi, '.').replace(/%2f/gi, '/');
+}
+
+function buildStack(raw) {
+  const box = document.createElement('div');
+  box.className = 'stack-box';
+  const head = document.createElement('div');
+  head.className = 'stack-head';
+
+  const frames = parseStack(raw);
+  if (frames.length <= 1) {
+    // Couldn't split into frames — fall back to the raw text.
+    head.textContent = 'Stack Trace';
+    box.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'stack-body';
+    body.textContent = raw;
+    box.appendChild(body);
+    return box;
+  }
+
+  head.textContent = `Stack Trace · ${frames.length} frames`;
+  box.appendChild(head);
+
+  const list = document.createElement('div');
+  list.className = 'stack-frames';
+  frames.forEach((f, i) => {
+    const frame = document.createElement('div');
+    frame.className = 'stack-frame';
+    const idx = span('sf-idx', String(i));
+    const fn = span('sf-fn', decodePkg(f.fn));
+    frame.appendChild(idx);
+    frame.appendChild(fn);
+    if (f.file) {
+      const loc = span('sf-loc', decodePkg(f.file) + ':' + f.line);
+      loc.title = 'Click to copy';
+      loc.addEventListener('click', () => {
+        navigator.clipboard.writeText(decodePkg(f.file) + ':' + f.line).then(() => {
+          loc.classList.add('jv-copied');
+          setTimeout(() => loc.classList.remove('jv-copied'), 800);
+        });
+      });
+      frame.appendChild(loc);
+    }
+    list.appendChild(frame);
+  });
+  box.appendChild(list);
+  return box;
 }
 
 // ── rendering ───────────────────────────────────────────────────────────────
@@ -418,10 +503,7 @@ function buildDetail(log) {
 
   // stacktrace
   if (p.stacktrace) {
-    const sbox = document.createElement('div');
-    sbox.className = 'stack-box';
-    sbox.innerHTML = `<div class="stack-head">Stack Trace</div><div class="stack-body">${escapeHtml(p.stacktrace)}</div>`;
-    detail.appendChild(sbox);
+    detail.appendChild(buildStack(p.stacktrace));
   }
   return detail;
 }

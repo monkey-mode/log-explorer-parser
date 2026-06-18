@@ -17,10 +17,39 @@ interface Props {
 
 export function JsonViewer({ value, depth = 0 }: Props) {
   const [collapsed, setCollapsed] = useState(depth >= 2);
+  const [copied, setCopied] = useState(false);
 
-  if (value === null) return <span className="text-purple-400">null</span>;
-  if (typeof value === 'boolean') return <span className="text-sky-300">{String(value)}</span>;
-  if (typeof value === 'number') return <span className="text-orange-300">{value}</span>;
+  const copyLeaf = (e: React.MouseEvent, raw: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(raw).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1000);
+    });
+  };
+
+  const leafClass = (color: string) =>
+    `${color} cursor-pointer rounded px-0.5 -mx-0.5 transition-colors ${
+      copied ? 'bg-green-500/30 ring-1 ring-green-500' : 'hover:bg-slate-700/60'
+    }`;
+
+  if (value === null)
+    return (
+      <span className={leafClass('text-purple-400')} title="Click to copy" onClick={(e) => copyLeaf(e, 'null')}>
+        null
+      </span>
+    );
+  if (typeof value === 'boolean')
+    return (
+      <span className={leafClass('text-sky-300')} title="Click to copy" onClick={(e) => copyLeaf(e, String(value))}>
+        {String(value)}
+      </span>
+    );
+  if (typeof value === 'number')
+    return (
+      <span className={leafClass('text-orange-300')} title="Click to copy" onClick={(e) => copyLeaf(e, String(value))}>
+        {value}
+      </span>
+    );
 
   if (typeof value === 'string') {
     // Detect and re-parse nested JSON strings
@@ -43,7 +72,11 @@ export function JsonViewer({ value, depth = 0 }: Props) {
       }
     }
     return (
-      <span className="text-green-300 break-all">
+      <span
+        className={leafClass('text-green-300 break-all')}
+        title="Click to copy"
+        onClick={(e) => copyLeaf(e, value)}
+      >
         &quot;{value}&quot;
       </span>
     );

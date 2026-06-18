@@ -44,6 +44,33 @@ function shortCorrId(id: string): string {
   return id ? id.substring(0, 8) + '…' : '';
 }
 
+interface StackFrame {
+  fn: string;
+  file: string;
+  line: string;
+}
+
+// Flattened Go stack: "<func> <file>:<line> <func> <file>:<line> …".
+// Functions and paths contain no spaces, so tokens pair up func → location.
+function parseStack(raw: string): StackFrame[] {
+  const tokens = raw.trim().split(/\s+/);
+  const frames: StackFrame[] = [];
+  let fnParts: string[] = [];
+  for (const tok of tokens) {
+    const m = tok.match(/^(.*):(\d+)$/);
+    if (m && (tok.includes('/') || tok.includes('.go'))) {
+      frames.push({ fn: fnParts.join(' '), file: m[1], line: m[2] });
+      fnParts = [];
+    } else {
+      fnParts.push(tok);
+    }
+  }
+  if (fnParts.length) frames.push({ fn: fnParts.join(' '), file: '', line: '' });
+  return frames;
+}
+
+const decodePkg = (s: string) => s.replace(/%2e/gi, '.').replace(/%2f/gi, '/');
+
 export function LogRow({ log, onFilterCorrId }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -192,16 +219,42 @@ export function LogRow({ log, onFilterCorrId }: Props) {
           </div>
 
           {/* Stacktrace */}
-          {p.stacktrace && (
-            <div className="mt-3 bg-slate-950 border border-red-900/40 rounded-md overflow-hidden">
-              <div className="px-3 py-1.5 bg-red-950/30 border-b border-red-900/40 text-[11px] text-red-400 font-semibold">
-                Stack Trace
+          {p.stacktrace && (() => {
+            const frames = parseStack(p.stacktrace);
+            return (
+              <div className="mt-3 bg-slate-950 border border-red-900/40 rounded-md overflow-hidden">
+                <div className="px-3 py-1.5 bg-red-950/30 border-b border-red-900/40 text-[11px] text-red-400 font-semibold">
+                  Stack Trace{frames.length > 1 ? ` · ${frames.length} frames` : ''}
+                </div>
+                {frames.length > 1 ? (
+                  <div className="max-h-[360px] overflow-y-auto">
+                    {frames.map((f, i) => (
+                      <div
+                        key={i}
+                        className="grid grid-cols-[auto_1fr] gap-x-2 px-3 py-1.5 border-b border-red-900/10 last:border-b-0"
+                      >
+                        <span className="row-span-2 text-[10px] text-slate-600 pt-0.5">{i}</span>
+                        <span className="text-[11px] text-red-300 break-all">{decodePkg(f.fn)}</span>
+                        {f.file && (
+                          <span
+                            className="text-[10px] text-slate-500 break-all cursor-pointer hover:text-slate-300"
+                            title="Click to copy"
+                            onClick={() => navigator.clipboard.writeText(`${decodePkg(f.file)}:${f.line}`)}
+                          >
+                            {decodePkg(f.file)}:{f.line}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <pre className="p-3 text-[11px] text-slate-400 overflow-x-auto leading-relaxed whitespace-pre-wrap break-all">
+                    {p.stacktrace}
+                  </pre>
+                )}
               </div>
-              <pre className="p-3 text-[11px] text-slate-400 overflow-x-auto leading-relaxed whitespace-pre">
-                {p.stacktrace}
-              </pre>
-            </div>
-          )}
+            );
+          })()}
         </div>
       )}
     </div>

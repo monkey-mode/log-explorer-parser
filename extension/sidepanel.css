@@ -184,6 +184,9 @@ body {
 .jv-str { color: #86efac; word-break: break-all; }
 .jv-key { color: #fca5a5; }
 .jv-punc { color: var(--text-dim); }
+.jv-leaf { cursor: pointer; border-radius: 3px; padding: 0 2px; margin: 0 -2px; transition: background .1s; }
+.jv-leaf:hover { background: rgba(51, 65, 85, .6); }
+.jv-copied { background: rgba(34, 197, 94, .3); box-shadow: 0 0 0 1px #22c55e; }
 .jv-toggle { cursor: pointer; color: var(--text-dim); }
 .jv-toggle:hover { color: var(--text); }
 .jv-collapsed { color: var(--text-dim); }
@@ -193,6 +196,16 @@ body {
 
 .stack-box { margin-top: 10px; background: var(--bg); border: 1px solid rgba(127,29,29,.4); border-radius: 6px; overflow: hidden; }
 .stack-head { padding: 5px 10px; background: rgba(69,10,10,.3); border-bottom: 1px solid rgba(127,29,29,.4); font-size: 11px; color: var(--red); font-weight: 600; }
-.stack-body { padding: 10px; font-size: 11px; color: var(--text-dim); overflow-x: auto; white-space: pre; }
+.stack-body { padding: 10px; font-size: 11px; color: var(--text-dim); overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+.stack-frames { padding: 4px 0; max-height: 360px; overflow-y: auto; }
+.stack-frame {
+  display: grid; grid-template-columns: auto 1fr; gap: 0 8px;
+  padding: 5px 10px; border-bottom: 1px solid rgba(127,29,29,.15);
+}
+.stack-frame:last-child { border-bottom: none; }
+.sf-idx { grid-row: span 2; color: var(--text-faint); font-size: 10px; padding-top: 1px; }
+.sf-fn { color: #fca5a5; font-size: 11px; word-break: break-all; }
+.sf-loc { color: var(--text-dim); font-size: 10px; word-break: break-all; cursor: pointer; border-radius: 3px; }
+.sf-loc:hover { color: var(--text); }
 
 .no-match { display: flex; align-items: center; justify-content: center; height: 80px; color: var(--text-dim); }
