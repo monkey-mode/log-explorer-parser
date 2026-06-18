@@ -32,10 +32,17 @@ The connection dot turns **green** once results are received.
 
 ### Tab scoping
 
-The side panel is **enabled only on OSD tabs** (`logging-nonprd.gcp.ktbapp.tech`)
-via per-tab `chrome.sidePanel.setOptions`. On any other tab it is disabled, so it
-never "follows" you across unrelated tabs. Captured data is keyed by tab id, and
-the panel only ever reads its own tab's data.
+There is **no global side panel** (the manifest deliberately omits
+`side_panel.default_path`). At startup the panel is disabled globally, then
+**enabled only on OSD tabs** (`logging-nonprd.gcp.ktbapp.tech`) via per-tab
+`chrome.sidePanel.setOptions`. This is what stops the panel from "following" you
+to unrelated tabs — a global panel persists window-wide once opened, but a
+per-tab panel is closed by Chrome when you switch to a tab where it's disabled.
+Captured data is keyed by tab id, and the panel only ever reads its own tab's
+data.
+
+> After updating the extension, reload it from `chrome://extensions` and reopen
+> the panel so the new (non-global) configuration takes effect.
 
 ## Pointing at another OSD host
 

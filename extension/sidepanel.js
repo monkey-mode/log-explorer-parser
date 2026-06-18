@@ -467,6 +467,7 @@ function buildDetail(log) {
 
   // key fields
   const kf = [];
+  if (log.container) kf.push(['Container', log.container, 'green']);
   if (p['X-Correlation-ID']) kf.push(['Corr-ID', p['X-Correlation-ID'], 'blue']);
   if (p['X-Request-ID']) kf.push(['Req-ID', p['X-Request-ID'], '']);
   if (p.error) kf.push(['Error', p.error, 'red']);

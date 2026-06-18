@@ -30,16 +30,18 @@ async function syncAllTabs() {
   }
 }
 
-// Open the panel when the toolbar icon is clicked (only effective on tabs
-// where the panel is enabled, i.e. OSD tabs).
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-  syncAllTabs();
-});
-chrome.runtime.onStartup.addListener(() => {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-  syncAllTabs();
-});
+async function bootstrap() {
+  // Disable the panel globally so there is no window-wide panel that "follows"
+  // across tabs. The panel exists only on tabs we explicitly enable below.
+  await chrome.sidePanel.setOptions({ enabled: false }).catch(() => {});
+  // Open the panel when the toolbar icon is clicked (only effective on tabs
+  // where the panel is enabled, i.e. OSD tabs).
+  await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+  await syncAllTabs();
+}
+
+chrome.runtime.onInstalled.addListener(bootstrap);
+chrome.runtime.onStartup.addListener(bootstrap);
 
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === 'loading' || info.url) {

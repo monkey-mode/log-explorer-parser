@@ -167,6 +167,7 @@ body {
 .kf .v { word-break: break-all; }
 .kf .v.blue { color: var(--blue); }
 .kf .v.red { color: var(--red); }
+.kf .v.green { color: var(--green); }
 
 .json-box { background: var(--bg); border: 1px solid var(--border-1); border-radius: 6px; overflow: hidden; }
 .json-head {

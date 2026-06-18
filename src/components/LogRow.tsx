@@ -110,6 +110,7 @@ export function LogRow({ log, onFilterCorrId }: Props) {
 
   // Key fields to show at top of detail
   const keyFields: { label: string; value: string; color?: string }[] = [];
+  if (log.container)         keyFields.push({ label: 'Container', value: log.container, color: 'text-green-400' });
   if (p['X-Correlation-ID']) keyFields.push({ label: 'Corr-ID', value: p['X-Correlation-ID'], color: 'text-blue-400' });
   if (p['X-Request-ID'])     keyFields.push({ label: 'Req-ID',  value: p['X-Request-ID'] });
   if (p.error)               keyFields.push({ label: 'Error',   value: p.error, color: 'text-red-400' });
