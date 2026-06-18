@@ -6,9 +6,10 @@ A GCP Logs Explorer-style viewer for OpenSearch CSV exports. Built to make it ea
 
 OpenSearch exports logs as CSV with this structure:
 
-| `@timestamp` | `kubernetes.container_name` | `json_payload` |
-|---|---|---|
-| Apr 11, 2026 @ 17:30:51 | orch-payment-transaction | `{ "message": "...", "severity": "ERROR", ... }` |
+| `@timestamp` | `kubernetes.container_name` | `json_payload` | `text_payload` |
+|---|---|---|---|
+| Apr 11, 2026 @ 17:30:51 | orch-payment-transaction | `{ "message": "...", "severity": "ERROR", ... }` | |
+| Apr 11, 2026 @ 17:30:52 | orch-payment-transaction | `-` | `plain log line from stdout` |
 
 The `json_payload` column is a multiline JSON blob — impossible to read in a spreadsheet and hard to filter in a text editor.
 
@@ -39,10 +40,23 @@ Open [http://localhost:3000](http://localhost:3000), then load your OpenSearch C
 Export from OpenSearch with these columns (in this order):
 
 ```
-@timestamp, kubernetes.container_name, json_payload
+@timestamp, kubernetes.container_name, json_payload, text_payload
 ```
 
 The parser handles multiline `json_payload` fields correctly — no pre-processing needed.
+
+When `json_payload` is `-` or blank (e.g. plain stdout/stderr lines), the parser falls back to `text_payload` and surfaces it as the log message. The `text_payload` column is optional — rows with only 3 columns are still accepted.
+
+## Browser Extension (live mode)
+
+The [`extension/`](extension/) folder contains a Chrome side-panel extension that skips the CSV export entirely. It captures the OpenSearch Dashboards search response (`opensearch-with-long-numerals`) live and renders it with the same explorer UI.
+
+- **No file needed** — run a search in OSD and results stream into the side panel
+- **Single `_source` field** — parses each hit's `_source`, preferring `json_payload` and falling back to `text_payload`
+- **Tab-scoped** — the panel is enabled only on the OSD origin and reads only its own tab's data, so it never follows you to unrelated tabs
+- **No build step** — load the folder directly via `chrome://extensions` → **Load unpacked**
+
+See [extension/README.md](extension/README.md) for loading instructions and how to point it at a different OSD host.
 
 ## Project Structure
 
@@ -58,7 +72,16 @@ src/
 │   └── JsonViewer.tsx    # Recursive collapsible JSON tree renderer
 └── lib/
     ├── csvParser.ts      # RFC 4180 CSV parser + log entry parser
+    ├── osParser.ts       # OpenSearch response parser (_source → log entry)
     └── logTypes.ts       # TypeScript types
+
+extension/                # Chrome side-panel extension (live OSD capture)
+├── manifest.json         # MV3 config
+├── interceptor.js        # MAIN world: patches fetch/XHR to capture the search response
+├── relay.js              # ISOLATED world: forwards captured JSON to the background
+├── background.js         # Service worker: per-tab storage + side-panel scoping
+├── parser.js             # _source → log entry (port of osParser.ts)
+└── sidepanel.{html,css,js} # The explorer UI
 ```
 
 ## Tech Stack

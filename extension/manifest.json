@@ -1,19 +1,36 @@
 {
   "manifest_version": 3,
-  "name": "Log Explorer",
+  "name": "OSD Log Explorer",
   "version": "1.0.0",
-  "description": "GCP-style log explorer for OpenSearch — query and investigate logs directly from your browser.",
-  "permissions": ["sidePanel", "storage", "tabs", "activeTab", "scripting"],
-  "host_permissions": ["<all_urls>"],
+  "description": "Reads logs live from the OpenSearch Dashboards search API (opensearch-with-long-numerals) and renders them in a side panel — scoped to the OSD tab only.",
+  "permissions": ["sidePanel", "storage", "tabs"],
+  "host_permissions": ["https://logging-nonprd.gcp.ktbapp.tech/*"],
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
-  "side_panel": {
-    "default_path": "src/sidepanel.html"
+    "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Log Explorer"
+    "default_title": "Open OSD Log Explorer"
   },
-  "icons": {}
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://logging-nonprd.gcp.ktbapp.tech/*"],
+      "js": ["interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://logging-nonprd.gcp.ktbapp.tech/*"],
+      "js": ["relay.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ]
 }
