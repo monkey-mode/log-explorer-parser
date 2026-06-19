@@ -9,7 +9,20 @@
       "Bash(git rm:*)",
       "Bash(node -e \"const c = require\\('@types/chrome'\\); console.log\\('ok'\\)\")",
       "Bash(npx next *)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST http://localhost:3000/api/proxy -H \"Content-Type: application/json\" -d '{\"url\":\"\",\"body\":{},\"cookie\":\"\"}')"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST http://localhost:3000/api/proxy -H \"Content-Type: application/json\" -d '{\"url\":\"\",\"body\":{},\"cookie\":\"\"}')",
+      "WebFetch(domain:developer.chrome.com)",
+      "Bash(git -C /Users/ytwok/dev/project/log-explorer-parser add extension/src/background.ts)",
+      "Bash(git -C /Users/ytwok/dev/project/log-explorer-parser commit -m ' *)",
+      "Bash(git -C /Users/ytwok/dev/project/log-explorer-parser push)",
+      "Bash(node -e ' *)",
+      "Bash(node --check sidepanel.js)",
+      "Bash(git checkout *)",
+      "Bash(node --check extension/sidepanel.js)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('extension/manifest.json','utf8'\\)\\); console.log\\('manifest OK'\\)\")",
+      "Bash(node --check extension/background.js)",
+      "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/build-extensions.yml'\\)\\); print\\('YAML OK'\\)\")",
+      "Bash(ruby -ryaml -e \"YAML.load_file\\('.github/workflows/build-extensions.yml'\\); puts 'YAML OK'\")",
+      "Bash(git check-ignore *)"
     ]
   }
 }

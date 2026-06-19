@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OSD Log Explorer</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Header -->
+      <header class="header">
+        <div class="brand">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <line x1="16" y1="13" x2="8" y2="13" />
+            <line x1="16" y1="17" x2="8" y2="17" />
+          </svg>
+          <span>OSD Log Explorer</span>
+        </div>
+        <span id="conn" class="dot dot-wait" title="Waiting for OSD search…"></span>
+        <div id="stats" class="stats"></div>
+      </header>
+
+      <!-- Filters -->
+      <div class="filters">
+        <div class="search-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input id="search" type="text" placeholder="Search… (press /)" />
+        </div>
+        <div id="sev-buttons" class="sev-buttons"></div>
+        <div id="service-picker" class="service-picker"></div>
+        <div id="corr-chip" class="corr-chip hidden"></div>
+      </div>
+
+      <!-- Count bar -->
+      <div id="count-bar" class="count-bar">No data loaded</div>
+
+      <!-- Log list -->
+      <main id="list" class="list">
+        <div id="empty" class="empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <p id="empty-msg">Run a search in OpenSearch Dashboards — logs appear here automatically.</p>
+        </div>
+      </main>
+    </div>
+
+    <script src="parser.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>
