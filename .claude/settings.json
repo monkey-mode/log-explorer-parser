@@ -22,7 +22,8 @@
       "Bash(node --check extension/background.js)",
       "Bash(python3 -c \"import yaml,sys; yaml.safe_load\\(open\\('.github/workflows/build-extensions.yml'\\)\\); print\\('YAML OK'\\)\")",
       "Bash(ruby -ryaml -e \"YAML.load_file\\('.github/workflows/build-extensions.yml'\\); puts 'YAML OK'\")",
-      "Bash(git check-ignore *)"
+      "Bash(git check-ignore *)",
+      "Bash(python3 -c \"import yaml; yaml.safe_load\\(open\\('.github/workflows/release-extension.yml'\\)\\); print\\('YAML OK'\\)\")"
     ]
   }
 }
