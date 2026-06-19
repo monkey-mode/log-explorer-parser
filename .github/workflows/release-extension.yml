@@ -50,6 +50,11 @@ jobs:
           name: osd-log-explorer-${{ steps.ver.outputs.version }}
           path: osd-log-explorer-${{ steps.ver.outputs.version }}.zip
 
+      - name: Delete existing release for this tag
+        run: gh release delete "${{ steps.ver.outputs.tag }}" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create GitHub Release
         run: |
           gh release create "${{ steps.ver.outputs.tag }}" \
