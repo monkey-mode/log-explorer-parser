@@ -1,0 +1,80 @@
+name: Release Extension
+
+# Triggered when you push a version tag, e.g.:
+#   git tag 0.0.1 && git push origin 0.0.1
+#   git tag v0.0.2 && git push origin v0.0.2
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"            # strip optional leading "v"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION from tag $TAG"
+
+      - name: Set manifest version to tag
+        run: |
+          node -e "
+            const f = 'extension/manifest.json';
+            const m = JSON.parse(require('fs').readFileSync(f, 'utf8'));
+            m.version = '${{ steps.ver.outputs.version }}';
+            require('fs').writeFileSync(f, JSON.stringify(m, null, 2) + '\n');
+            console.log('manifest version =', m.version);
+          "
+
+      - name: Pack extension as zip
+        run: |
+          zip -r "osd-log-explorer-${{ steps.ver.outputs.version }}.zip" extension \
+            -x "*.DS_Store" "extension/README.md"
+          ls -lh osd-log-explorer-*.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: osd-log-explorer-${{ steps.ver.outputs.version }}
+          path: osd-log-explorer-${{ steps.ver.outputs.version }}.zip
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --title "OSD Log Explorer v${{ steps.ver.outputs.version }}" \
+            --notes "$(cat <<'EOF'
+          ## OSD Log Explorer v${{ steps.ver.outputs.version }}
+
+          Chrome side-panel log viewer that reads logs live from the OpenSearch
+          Dashboards search API (`opensearch-with-long-numerals`). Works on both
+          `logging-nonprd` and `logging-prd`.
+
+          **Install:**
+          1. Download and unzip `osd-log-explorer-${{ steps.ver.outputs.version }}.zip` to a permanent folder
+          2. Open `chrome://extensions`
+          3. Enable **Developer mode** (top-right toggle)
+          4. Click **Load unpacked** → select the unzipped `extension` folder
+
+          **Use:** Open an OSD Discover tab, click the extension icon to open the
+          side panel, then run a search — results appear automatically.
+
+          ---
+          > Chrome blocks side-loading `.crx` files from outside the Web Store (since Chrome 73).
+          > The zip + Load unpacked method is the only reliable way to install self-signed extensions.
+          EOF
+          )" \
+            "osd-log-explorer-${{ steps.ver.outputs.version }}.zip"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
