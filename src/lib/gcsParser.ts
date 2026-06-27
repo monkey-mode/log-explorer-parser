@@ -28,6 +28,14 @@ function normSeverity(s?: string): Severity {
   return 'INFO'; // INFO, NOTICE, DEFAULT, unknown
 }
 
+/** Format an absolute epoch (ms) as HH:MM:SS.mmm in the browser's local time. */
+function formatLocalTime(ms: number): string {
+  if (!ms || Number.isNaN(ms)) return '';
+  const d = new Date(ms);
+  const pad = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
 /** Derive a container/service name from the entry's resource labels or logName. */
 function deriveContainer(entry: GcsLogEntry): string {
   const labels = entry.resource?.labels ?? {};
@@ -76,12 +84,20 @@ function parseGcsEntry(entry: GcsLogEntry, id: number): LogEntry {
   const requestId = (payload['X-Request-ID'] as string) || (payload['x-request-id'] as string) || '';
   // Severity: prefer the payload's own severity, else the entry-level severity.
   const severity = normSeverity((payload.severity as string | undefined) ?? entry.severity);
-  const payloadTs = payload.timestamp ? Date.parse(payload.timestamp as string) : Date.parse(ts);
+  // Prefer the payload's own timestamp, but fall back to the entry timestamp when
+  // it is missing OR unparseable — otherwise those rows would sort to epoch 0.
+  let payloadTs = payload.timestamp ? Date.parse(payload.timestamp as string) : NaN;
+  if (Number.isNaN(payloadTs)) payloadTs = Date.parse(ts);
+  const safeTs = Number.isNaN(payloadTs) ? 0 : payloadTs;
 
   return {
     id,
     ts,
-    payloadTs: Number.isNaN(payloadTs) ? 0 : payloadTs,
+    // Display every row in one consistent timezone (browser local), derived from
+    // the same absolute instant used for sorting — so display order never looks
+    // shuffled regardless of which fields carry +07:00 vs UTC timestamps.
+    tsDisplay: formatLocalTime(safeTs),
+    payloadTs: safeTs,
     container,
     payload,
     severity,

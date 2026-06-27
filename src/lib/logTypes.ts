@@ -47,6 +47,7 @@ export interface LogPayload {
 export interface LogEntry {
   id: number;
   ts: string;
+  tsDisplay?: string; // optional pre-formatted display time (consistent timezone)
   payloadTs: number; // parsed from payload.timestamp, used for sorting
   container: string;
   payload: LogPayload;

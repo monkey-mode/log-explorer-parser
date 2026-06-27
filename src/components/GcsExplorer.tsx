@@ -25,6 +25,7 @@ import {
   getCachedMeta,
   cacheStats,
   clearCache,
+  deleteCached,
   type CacheMeta,
 } from '@/lib/gcsCache';
 import { LogRow } from './LogRow';
@@ -409,6 +410,7 @@ export function GcsExplorer() {
   // Per-file download/cache status + cache stats
   const [fileStatus, setFileStatus] = useState<Record<string, FileStatus>>({});
   const [activeBatch, setActiveBatch] = useState<string[]>([]);
+  const [loadedNames, setLoadedNames] = useState<Set<string>>(new Set());
   const [cacheInfo, setCacheInfo] = useState<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
   const refreshCacheInfo = useCallback(() => { cacheStats().then(setCacheInfo); }, []);
 
@@ -575,6 +577,7 @@ export function GcsExplorer() {
     setError('');
     setObjects([]);
     setFileStatus({});
+    setLoadedNames(new Set());
     const prefix = dateToPrefix(selectedLog, date);
     try {
       const found = await listObjects(token, selectedBucket, prefix);
@@ -614,6 +617,7 @@ export function GcsExplorer() {
       setFileStatus((prev) => ({ ...prev, [name]: s }));
 
     const errors: string[] = [];
+    const loaded = new Set<string>();
     try {
       const merged: LogEntry[] = [];
       for (const obj of ok) {
@@ -632,6 +636,7 @@ export function GcsExplorer() {
             setStatus(obj.name, { state: 'done', received: obj.size, total: obj.size });
           }
           merged.push(...parseGcsNdjson(text));
+          loaded.add(obj.name);
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'download failed';
           setStatus(obj.name, { state: 'error', error: msg });
@@ -642,6 +647,7 @@ export function GcsExplorer() {
       merged.sort((a, b) => a.payloadTs - b.payloadTs);
       merged.forEach((l, i) => { l.id = i; });
       setAllLogs(merged);
+      setLoadedNames(loaded);
       setLoadedLabel(label);
       setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
       setTimeRange(DEFAULT_TIME_RANGE);
@@ -664,15 +670,23 @@ export function GcsExplorer() {
   const handleClearCache = useCallback(async () => {
     await clearCache();
     refreshCacheInfo();
-    // Any "cached" markers revert to idle (or skipped for oversized).
+    // Any "cached"/"loaded" markers revert to idle (oversized stays skipped).
     setFileStatus((prev) => {
       const next: Record<string, FileStatus> = {};
       for (const [name, s] of Object.entries(prev)) {
-        next[name] = s.state === 'cached' ? { state: 'idle' } : s;
+        next[name] = (s.state === 'cached' || s.state === 'done') ? { state: 'idle' } : s;
       }
       return next;
     });
   }, [refreshCacheInfo]);
+
+  // Remove one file from the local cache (does not unload it from the viewer).
+  const handleDeleteFile = useCallback(async (name: string) => {
+    if (!selectedBucket) return;
+    await deleteCached(selectedBucket, name);
+    refreshCacheInfo();
+    setFileStatus((prev) => ({ ...prev, [name]: { state: 'idle' } }));
+  }, [selectedBucket, refreshCacheInfo]);
 
   // Keyboard shortcuts (same as the OpenSearch explorer)
   useEffect(() => {
@@ -884,6 +898,8 @@ export function GcsExplorer() {
               const st = fileStatus[o.name];
               const state: FileState = tooBig ? 'skipped' : st?.state ?? 'idle';
               const dlPct = st?.total ? Math.min(100, Math.round(((st.received ?? 0) / st.total) * 100)) : 0;
+              const isOpen = loadedNames.has(o.name);
+              const inCache = state === 'cached' || state === 'done';
               const subtle =
                 state === 'error'   ? 'text-red-400' :
                 state === 'cached'  ? 'text-emerald-400' :
@@ -898,17 +914,22 @@ export function GcsExplorer() {
                     ? `${formatSize(o.size)} — exceeds ${MAX_OBJECT_BYTES / 1024 / 1024} MB limit`
                     : st?.error
                       ? `${fileLabel(o.name)} — ${st.error}`
-                      : `${fileLabel(o.name)} · ${formatSize(o.size)}${state === 'cached' ? ' · cached' : ''}`}
+                      : `${fileLabel(o.name)} · ${formatSize(o.size)}${state === 'cached' ? ' · cached' : ''}${isOpen ? ' · open' : ''}`}
                   className={`group relative flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border text-left transition-colors overflow-hidden ${
                     tooBig
                       ? 'bg-slate-900 border-slate-800 cursor-not-allowed opacity-60'
-                      : state === 'cached'
-                        ? 'bg-slate-800 border-emerald-900 hover:border-emerald-600'
-                        : 'bg-slate-800 border-slate-700 hover:border-blue-600 hover:bg-slate-700'
+                      : isOpen
+                        ? 'bg-blue-950/40 border-blue-500 ring-1 ring-blue-500'
+                        : state === 'cached'
+                          ? 'bg-slate-800 border-emerald-900 hover:border-emerald-600'
+                          : 'bg-slate-800 border-slate-700 hover:border-blue-600 hover:bg-slate-700'
                   }`}
                 >
                   <div className="min-w-0">
-                    <div className="text-xs font-medium text-slate-200 font-mono">{hourRange(o.name)}</div>
+                    <div className="flex items-center gap-1.5">
+                      {isOpen && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />}
+                      <span className="text-xs font-medium text-slate-200 font-mono truncate">{hourRange(o.name)}</span>
+                    </div>
                     <div className={`text-[10px] ${subtle}`}>
                       {formatSize(o.size)}
                       {tooBig && ' · too large'}
@@ -916,29 +937,45 @@ export function GcsExplorer() {
                       {state === 'done' && ' · loaded'}
                       {state === 'downloading' && ` · ${dlPct}%`}
                       {state === 'error' && ' · failed'}
+                      {isOpen && ' · open'}
                     </div>
                   </div>
 
-                  {/* trailing status icon */}
-                  {state === 'downloading' ? (
-                    <svg className="w-3.5 h-3.5 text-blue-400 animate-spin shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                    </svg>
-                  ) : state === 'cached' || state === 'done' ? (
-                    <svg className={`w-3.5 h-3.5 shrink-0 ${state === 'cached' ? 'text-emerald-400' : 'text-blue-400'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  ) : state === 'error' ? (
-                    <svg className="w-3.5 h-3.5 text-red-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                      <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-                    </svg>
-                  ) : !tooBig ? (
-                    <svg className="w-3.5 h-3.5 text-slate-600 group-hover:text-blue-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                      <polyline points="7 10 12 15 17 10"/>
-                      <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
-                  ) : null}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {/* trailing status icon */}
+                    {state === 'downloading' ? (
+                      <svg className="w-3.5 h-3.5 text-blue-400 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                      </svg>
+                    ) : inCache ? (
+                      <svg className={`w-3.5 h-3.5 ${state === 'cached' ? 'text-emerald-400' : 'text-blue-400'}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : state === 'error' ? (
+                      <svg className="w-3.5 h-3.5 text-red-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                      </svg>
+                    ) : !tooBig ? (
+                      <svg className="w-3.5 h-3.5 text-slate-600 group-hover:text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                      </svg>
+                    ) : null}
+
+                    {/* per-file cache clear (only when this file is cached) */}
+                    {inCache && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        title="Remove this file from local cache"
+                        onClick={(e) => { e.stopPropagation(); handleDeleteFile(o.name); }}
+                        className="text-slate-500 hover:text-red-400 leading-none text-sm cursor-pointer"
+                      >
+                        ×
+                      </span>
+                    )}
+                  </div>
 
                   {/* per-file progress underline */}
                   {state === 'downloading' && (

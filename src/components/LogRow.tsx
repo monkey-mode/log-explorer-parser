@@ -135,7 +135,7 @@ export function LogRow({ log, onFilterCorrId }: Props) {
           {log.severity}
         </span>
         <span className="text-slate-500 shrink-0 text-[11px]">
-          {formatTimestamp(log.payload.timestamp ?? log.ts)}
+          {log.tsDisplay || formatTimestamp(log.payload.timestamp ?? log.ts)}
         </span>
         <span className="text-green-400 shrink-0 max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap text-[11px]"
           title={log.container}>
