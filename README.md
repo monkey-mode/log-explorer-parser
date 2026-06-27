@@ -35,6 +35,47 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000), then load your OpenSearch CSV export via the **Load CSV** button or drag & drop.
 
+## GCS bucket viewer (`/gcs`)
+
+When logs are routed to a Cloud Storage bucket via a **Cloud Logging → GCS sink** (instead of OpenSearch), use the GCS viewer at [http://localhost:3000/gcs](http://localhost:3000/gcs). It runs **entirely in the browser**: you **sign in with your own Google account**, then **choose a project and bucket** and read it directly via the Cloud Storage JSON API with your own IAM permissions — no server, no service-account key, no shared credentials. Handy when you only have **read/download** access and can't use GCP Log Explorer.
+
+After sign-in you pick a **project** (from the projects you can access) and a **bucket** — the bucket dropdown only lists buckets whose name ends with `k8s_container_logs`. Each bucket is organized as `<logId>/YYYY/MM/DD/<hourly>.json`, where each object is newline-delimited Cloud Logging `LogEntry` JSON (top-level folders like `stdout/`, `stderr/`). You can then filter by **severity**, **service** (searchable multi-select), a **time range** (relative "last N min/hours" or an absolute from/to), full-text search, and correlation ID. Files over **50 MB** are skipped to keep the browser responsive.
+
+### One-time setup: create an OAuth Client ID
+
+You need a public OAuth 2.0 **Client ID** so the browser can sign you in. In the [GCP Console](https://console.cloud.google.com/) for the project that owns the bucket:
+
+1. **APIs & Services → OAuth consent screen** — choose **Internal** if your account is in the same Google Workspace org as the project (simplest); otherwise choose **External** and add your email under **Test users**. Set an app name + support email, Save.
+2. **APIs & Services → Library** — enable both **Cloud Storage API** (read buckets/objects) and **Cloud Resource Manager API** (list your projects).
+3. **APIs & Services → Credentials → Create credentials → OAuth client ID** — Application type **Web application**.
+4. Under **Authorized JavaScript origins**, add `http://localhost:3000` (add your deployed origin later too). No redirect URI is needed. Click **Create**.
+5. Copy the **Client ID** (looks like `…apps.googleusercontent.com`).
+
+> The Client ID is public and safe to ship. There is **no client secret** — this app uses the browser token flow.
+
+### Run
+
+```bash
+cp .env.local.example .env.local
+# then edit .env.local:
+#   NEXT_PUBLIC_GOOGLE_CLIENT_ID=<your client id>.apps.googleusercontent.com
+#   NEXT_PUBLIC_GCS_PROJECT=<project to pre-select>          # optional
+#   NEXT_PUBLIC_GCS_LOG_BUCKET=<bucket to pre-select>        # optional
+
+npm install
+npm run dev
+```
+
+Open [`/gcs`](http://localhost:3000/gcs), click **Sign in with Google**, choose a **project** and **bucket**, then pick a log (e.g. `stdout`) and a date, click **List files**, and load one (or **Load all** for the day).
+
+> Notes:
+> - The token requests the `devstorage.read_only` and `cloud-platform.read-only` scopes (the latter is needed to list your projects). Access to any project/bucket/object is still enforced by your own IAM.
+> - Your sign-in token is kept in `sessionStorage` so a page refresh keeps you signed in; it clears when you close the tab and expires after ~1 hour (then sign in again). Nothing is stored server-side.
+> - Only buckets whose name ends with `k8s_container_logs` are shown in the bucket picker.
+> - Files over 50 MB are skipped on load to keep the browser responsive.
+> - Downloads show per-file and overall progress, and each loaded object is cached locally in **IndexedDB** (keyed by bucket + object + generation) so reloading it is instant and offline. Use **Clear cache** in the file bar to purge it; nothing is written to your filesystem.
+> - Sink files are written in hourly batches, so the most recent entries may lag by up to an hour — this is browse/near-real-time, not a true live tail.
+
 ## CSV Format
 
 Export from OpenSearch with these columns (in this order):

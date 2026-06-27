@@ -289,6 +289,10 @@ export function LogExplorer() {
           <span className="font-bold text-white text-[15px] tracking-tight">Log Explorer</span>
         </div>
 
+        <a href="/gcs" className="text-xs text-slate-400 hover:text-blue-300 underline underline-offset-2">
+          GCS bucket viewer →
+        </a>
+
         {/* Load file button */}
         <label className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold rounded-md cursor-pointer transition-colors">
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
