@@ -179,12 +179,13 @@ function logTimeMs(log: LogEntry): number {
 }
 
 /** Resolve a TimeRange to an inclusive [from, to] window (ms), or null = no bound. */
-function computeWindow(tr: TimeRange, anchorTs: number): { from?: number; to?: number } | null {
+function computeWindow(tr: TimeRange, nowTs: number): { from?: number; to?: number } | null {
   if (tr.mode === 'relative') {
-    if (tr.preset === 'all' || !anchorTs) return null;
+    if (tr.preset === 'all') return null;
     const p = REL_PRESETS.find((x) => x.key === tr.preset);
     if (!p || !p.ms) return null;
-    return { from: anchorTs - p.ms, to: anchorTs };
+    // Relative presets are counted back from the current (real) time.
+    return { from: nowTs - p.ms, to: nowTs };
   }
   const from = tr.from ? new Date(tr.from).getTime() : undefined;
   const to = tr.to ? new Date(tr.to).getTime() : undefined;
@@ -289,7 +290,7 @@ function TimeFilter({ value, onChange, anchorTs, minTs }: TimeFilterProps) {
                 ))}
               </div>
               <p className="mt-2 px-1 text-[10px] text-slate-500">
-                Counted back from the newest loaded entry.
+                Counted back from the current time.
               </p>
             </div>
           ) : (
@@ -545,7 +546,9 @@ export function GcsExplorer() {
     return { minTs: min === Infinity ? 0 : min, maxTs: max };
   }, [allLogs]);
 
-  const timeWindow = useMemo(() => computeWindow(timeRange, maxTs), [timeRange, maxTs]);
+  // Relative presets anchor on the real current time; recomputed when the filter
+  // or the loaded set changes.
+  const timeWindow = useMemo(() => computeWindow(timeRange, Date.now()), [timeRange, maxTs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredLogs = useMemo(() => {
     const q = filters.search.toLowerCase().trim();
