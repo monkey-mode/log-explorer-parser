@@ -10,6 +10,7 @@ import {
   DEFAULT_PROJECT,
   BUCKET_SUFFIX,
   MAX_OBJECT_BYTES,
+  MAX_OBJECT_LABEL,
   requestAccessToken,
   listProjects,
   listBuckets,
@@ -361,15 +362,40 @@ function fileLabel(name: string): string {
   return parts[parts.length - 1] || name;
 }
 
-/** "…/00:00:00_00:59:59_S0.json" → "00:00–01:00" (falls back to the raw name). */
+const hm = (ms: number) => {
+  const d = new Date(ms);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+};
+
+/**
+ * Local-time window covered by a sink object. Sink files are named by the UTC
+ * hour (e.g. ".../2026/06/29/01:00:00_01:59:59_S0.json"), but rows display in
+ * local time — so convert the UTC path date+hour to the browser's local zone.
+ * Returns { startMs, endMs } or null when the name doesn't match.
+ */
+function fileWindow(name: string): { startMs: number; endMs: number } | null {
+  const m = name.match(/(\d{4})\/(\d{2})\/(\d{2})\/(\d{2}):(\d{2}):(\d{2})_(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const n = m.map(Number);
+  const startMs = Date.UTC(n[1], n[2] - 1, n[3], n[4], n[5], n[6]);
+  const endMs = Date.UTC(n[1], n[2] - 1, n[3], n[7], n[8], n[9]) + 1000; // inclusive end → next-hour boundary
+  return { startMs, endMs };
+}
+
+/** Local-time label for a sink file, e.g. "08:00–09:00" (falls back to filename). */
 function hourRange(name: string): string {
-  const base = fileLabel(name);
-  const m = base.match(/^(\d{2}):\d{2}:\d{2}_(\d{2}):(\d{2}):(\d{2})/);
-  if (!m) return base.replace(/\.json$/, '');
-  const start = m[1];
-  // round the end (e.g. 00:59:59) up to the next hour for a clean range label
-  const end = m[3] === '59' && m[4] === '59' ? String((Number(m[2]) + 1) % 24).padStart(2, '0') : m[2];
-  return `${start}:00–${end}:00`;
+  const w = fileWindow(name);
+  if (!w) return fileLabel(name).replace(/\.json$/, '');
+  return `${hm(w.startMs)}–${hm(w.endMs)}`;
+}
+
+/** Verbose local + UTC tooltip for a file card. */
+function fileTooltip(name: string, sizeLabel: string): string {
+  const w = fileWindow(name);
+  const raw = fileLabel(name);
+  if (!w) return `${raw} · ${sizeLabel}`;
+  const dateStr = new Date(w.startMs).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return `Local ${dateStr} ${hm(w.startMs)}–${hm(w.endMs)} · ${sizeLabel}\nUTC file: ${raw}`;
 }
 
 function formatSize(bytes: number): string {
@@ -610,7 +636,7 @@ export function GcsExplorer() {
     const tooBig = targets.filter((o) => o.size > MAX_OBJECT_BYTES);
     const ok = targets.filter((o) => o.size <= MAX_OBJECT_BYTES);
     if (!ok.length) {
-      setError(`All selected file(s) exceed the ${MAX_OBJECT_BYTES / 1024 / 1024} MB limit.`);
+      setError(`All selected file(s) exceed the ${MAX_OBJECT_LABEL} limit.`);
       return;
     }
     setLoading(true);
@@ -657,7 +683,7 @@ export function GcsExplorer() {
       refreshCacheInfo();
 
       const notes: string[] = [];
-      if (tooBig.length) notes.push(`Skipped ${tooBig.length} file(s) over ${MAX_OBJECT_BYTES / 1024 / 1024} MB.`);
+      if (tooBig.length) notes.push(`Skipped ${tooBig.length} file(s) over ${MAX_OBJECT_LABEL}.`);
       if (errors.length) notes.push(`Failed: ${errors.join('; ')}`);
       setError(notes.join(' '));
     } catch (e) {
@@ -857,7 +883,12 @@ export function GcsExplorer() {
             <span className="text-[11px] text-slate-500">
               {objects.length} file{objects.length === 1 ? '' : 's'} · {formatSize(totalSize)}
             </span>
-            <span className="text-[10px] text-slate-600">(max {MAX_OBJECT_BYTES / 1024 / 1024} MB/file)</span>
+            <span className="text-[10px] text-slate-600" title="Sink files are named by UTC hour; cards show the equivalent local time.">
+              (times shown in local time)
+            </span>
+            {Number.isFinite(MAX_OBJECT_BYTES) && (
+              <span className="text-[10px] text-slate-600">(max {MAX_OBJECT_LABEL}/file)</span>
+            )}
 
             {cacheInfo.count > 0 && (
               <button
@@ -914,10 +945,10 @@ export function GcsExplorer() {
                   onClick={() => loadObjects([o], hourRange(o.name))}
                   disabled={tooBig || loading}
                   title={tooBig
-                    ? `${formatSize(o.size)} — exceeds ${MAX_OBJECT_BYTES / 1024 / 1024} MB limit`
+                    ? `${fileTooltip(o.name, formatSize(o.size))}\n— exceeds ${MAX_OBJECT_LABEL} limit`
                     : st?.error
                       ? `${fileLabel(o.name)} — ${st.error}`
-                      : `${fileLabel(o.name)} · ${formatSize(o.size)}${state === 'cached' ? ' · cached' : ''}${isOpen ? ' · open' : ''}`}
+                      : `${fileTooltip(o.name, formatSize(o.size))}${state === 'cached' ? ' · cached' : ''}${isOpen ? ' · open' : ''}`}
                   className={`group relative flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border text-left transition-colors overflow-hidden ${
                     tooBig
                       ? 'bg-slate-900 border-slate-800 cursor-not-allowed opacity-60'
