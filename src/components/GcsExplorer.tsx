@@ -11,6 +11,7 @@ import {
   BUCKET_SUFFIX,
   MAX_OBJECT_BYTES,
   MAX_OBJECT_LABEL,
+  MAX_ENTRIES,
   requestAccessToken,
   listProjects,
   listBuckets,
@@ -32,6 +33,12 @@ import {
 import { LogRow } from './LogRow';
 
 const TOKEN_STORAGE_KEY = 'gcs_access_token';
+
+// Cap how many rows are rendered to the DOM at once. Large files can parse to
+// hundreds of thousands of entries; rendering them all freezes the tab. They
+// stay in memory and remain searchable/filterable — only the rendered slice is
+// limited. Narrow with the filters to see more-specific results.
+const RENDER_LIMIT = 2000;
 
 type FileState = 'idle' | 'downloading' | 'cached' | 'done' | 'error' | 'skipped';
 interface FileStatus {
@@ -177,6 +184,31 @@ function logTimeMs(log: LogEntry): number {
   if (log.payloadTs && !Number.isNaN(log.payloadTs)) return log.payloadTs;
   const t = Date.parse(log.ts);
   return Number.isNaN(t) ? 0 : t;
+}
+
+type TimeWindow = { from?: number; to?: number } | null;
+
+/** Shared filter predicate — used both for the in-memory list and full-file scans. */
+function matchLog(log: LogEntry, filters: FilterState, timeWindow: TimeWindow): boolean {
+  if (filters.severity !== 'ALL' && log.severity !== filters.severity) return false;
+  if (filters.services.length > 0 && !filters.services.includes(log.container)) return false;
+  if (filters.corrId && log.corrId !== filters.corrId) return false;
+  if (timeWindow) {
+    const t = logTimeMs(log);
+    if (timeWindow.from !== undefined && t < timeWindow.from) return false;
+    if (timeWindow.to !== undefined && t > timeWindow.to) return false;
+  }
+  const q = filters.search.toLowerCase().trim();
+  if (q) {
+    const haystack = [
+      log.message, log.error, log.container, log.corrId,
+      log.callUrl ?? '', log.httpReq?.requestUrl ?? '', log.httpReq?.requestMethod ?? '',
+      log.payload.caller ?? '', String(log.httpSC ?? ''), String(log.httpReq?.status ?? ''),
+      JSON.stringify(log.payload),
+    ].join(' ').toLowerCase();
+    if (!haystack.includes(q)) return false;
+  }
+  return true;
 }
 
 /** Resolve a TimeRange to an inclusive [from, to] window (ms), or null = no bound. */
@@ -438,6 +470,10 @@ export function GcsExplorer() {
   const [fileStatus, setFileStatus] = useState<Record<string, FileStatus>>({});
   const [activeBatch, setActiveBatch] = useState<string[]>([]);
   const [loadedNames, setLoadedNames] = useState<Set<string>>(new Set());
+  const [loadedObjects, setLoadedObjects] = useState<GcsObject[]>([]); // source files for full-file scans
+  const [loadTotal, setLoadTotal] = useState(0); // total entries available across loaded files
+  const [scanMatched, setScanMatched] = useState(0); // entries matching filters in the last full scan
+  const [scanning, setScanning] = useState(false);
   const [cacheInfo, setCacheInfo] = useState<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
   const refreshCacheInfo = useCallback(() => { cacheStats().then(setCacheInfo); }, []);
 
@@ -447,6 +483,7 @@ export function GcsExplorer() {
   const [timeRange, setTimeRange] = useState<TimeRange>(DEFAULT_TIME_RANGE);
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const skipScanRef = useRef(false); // suppress the auto re-scan right after a load
 
   // After sign-in, list the user's projects.
   useEffect(() => {
@@ -543,6 +580,8 @@ export function GcsExplorer() {
     setLogPrefixes([]);
     setObjects([]);
     setAllLogs([]);
+    setLoadedObjects([]);
+    setLoadTotal(0);
     setLoadedLabel('');
   }, []);
 
@@ -576,29 +615,14 @@ export function GcsExplorer() {
   // or the loaded set changes.
   const timeWindow = useMemo(() => computeWindow(timeRange, Date.now()), [timeRange, maxTs]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filteredLogs = useMemo(() => {
-    const q = filters.search.toLowerCase().trim();
-    return allLogs.filter((log) => {
-      if (filters.severity !== 'ALL' && log.severity !== filters.severity) return false;
-      if (filters.services.length > 0 && !filters.services.includes(log.container)) return false;
-      if (filters.corrId && log.corrId !== filters.corrId) return false;
-      if (timeWindow) {
-        const t = logTimeMs(log);
-        if (timeWindow.from !== undefined && t < timeWindow.from) return false;
-        if (timeWindow.to !== undefined && t > timeWindow.to) return false;
-      }
-      if (q) {
-        const haystack = [
-          log.message, log.error, log.container, log.corrId,
-          log.callUrl ?? '', log.httpReq?.requestUrl ?? '', log.httpReq?.requestMethod ?? '',
-          log.payload.caller ?? '', String(log.httpSC ?? ''), String(log.httpReq?.status ?? ''),
-          JSON.stringify(log.payload),
-        ].join(' ').toLowerCase();
-        if (!haystack.includes(q)) return false;
-      }
-      return true;
-    });
-  }, [allLogs, filters, timeWindow]);
+  const filteredLogs = useMemo(
+    () => allLogs.filter((log) => matchLog(log, filters, timeWindow)),
+    [allLogs, filters, timeWindow]
+  );
+
+  // Only render a bounded slice to keep the DOM (and memory) manageable.
+  const visibleLogs = useMemo(() => filteredLogs.slice(0, RENDER_LIMIT), [filteredLogs]);
+  const truncated = filteredLogs.length > RENDER_LIMIT;
 
   // List the files for the selected log + date.
   const listFiles = useCallback(async () => {
@@ -607,6 +631,8 @@ export function GcsExplorer() {
     setObjects([]);
     setFileStatus({});
     setLoadedNames(new Set());
+    setLoadedObjects([]);
+    setLoadTotal(0);
     const prefix = dateToPrefix(selectedLog, date);
     try {
       const found = await listObjects(token, selectedBucket, prefix);
@@ -649,6 +675,7 @@ export function GcsExplorer() {
     const loaded = new Set<string>();
     try {
       const merged: LogEntry[] = [];
+      let totalSeen = 0; // total entries across files, including ones over the cap
       for (const obj of ok) {
         try {
           let text: string;
@@ -664,7 +691,13 @@ export function GcsExplorer() {
             await putCached({ bucket: selectedBucket, name: obj.name, text, size: obj.size, generation: obj.generation });
             setStatus(obj.name, { state: 'done', received: obj.size, total: obj.size });
           }
-          merged.push(...parseGcsNdjson(text));
+          // Split-free parse with a global cap across the batch, so memory stays
+          // bounded no matter how big the file(s) are.
+          const remainingCap = Number.isFinite(MAX_ENTRIES) ? Math.max(0, MAX_ENTRIES - merged.length) : Infinity;
+          const parsed = parseGcsNdjson(text, { limit: remainingCap });
+          totalSeen += parsed.total;
+          // Append without spread (push(...bigArray) overflows the call stack).
+          for (let i = 0; i < parsed.entries.length; i++) merged.push(parsed.entries[i]);
           loaded.add(obj.name);
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'download failed';
@@ -677,12 +710,19 @@ export function GcsExplorer() {
       merged.forEach((l, i) => { l.id = i; });
       setAllLogs(merged);
       setLoadedNames(loaded);
+      setLoadedObjects(ok.filter((o) => loaded.has(o.name)));
+      setLoadTotal(totalSeen);
+      setScanMatched(0);
       setLoadedLabel(label);
       setFilters({ search: '', severity: 'ALL', services: [], corrId: '' });
       setTimeRange(DEFAULT_TIME_RANGE);
+      skipScanRef.current = true; // the filter reset above must not trigger a re-scan
       refreshCacheInfo();
 
       const notes: string[] = [];
+      if (totalSeen > merged.length) {
+        notes.push(`Kept first ${merged.length.toLocaleString()} of ${totalSeen.toLocaleString()} entries (memory cap). Applying any filter searches the whole file.`);
+      }
       if (tooBig.length) notes.push(`Skipped ${tooBig.length} file(s) over ${MAX_OBJECT_LABEL}.`);
       if (errors.length) notes.push(`Failed: ${errors.join('; ')}`);
       setError(notes.join(' '));
@@ -692,6 +732,58 @@ export function GcsExplorer() {
       setLoading(false);
     }
   }, [token, selectedBucket, refreshCacheInfo]);
+
+  // Re-read the loaded file(s) from cache and keep only rows matching the current
+  // filters (up to the cap). Lets you search the *whole* file even when the
+  // initial load was capped — useful for single 1-hour files you can't narrow.
+  const scanFullFile = useCallback(async () => {
+    if (!loadedObjects.length || !token || !selectedBucket) return;
+    setScanning(true);
+    setError('');
+    const matcher = (l: LogEntry) => matchLog(l, filters, timeWindow);
+    try {
+      const merged: LogEntry[] = [];
+      let totalSeen = 0, totalMatched = 0;
+      for (const obj of loadedObjects) {
+        const hit = await getCached(selectedBucket, obj.name);
+        let text = hit?.text;
+        if (!text) {
+          text = await downloadObject(token, selectedBucket, obj.name, obj.size);
+          await putCached({ bucket: selectedBucket, name: obj.name, text, size: obj.size, generation: obj.generation });
+        }
+        const remainingCap = Number.isFinite(MAX_ENTRIES) ? Math.max(0, MAX_ENTRIES - merged.length) : Infinity;
+        const parsed = parseGcsNdjson(text, { limit: remainingCap, match: matcher });
+        totalSeen += parsed.total;
+        totalMatched += parsed.matched;
+        for (let i = 0; i < parsed.entries.length; i++) merged.push(parsed.entries[i]);
+      }
+      merged.sort((a, b) => a.payloadTs - b.payloadTs);
+      merged.forEach((l, i) => { l.id = i; });
+      setAllLogs(merged);
+      setLoadTotal(totalSeen);
+      setScanMatched(totalMatched);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Full-file scan failed');
+    } finally {
+      setScanning(false);
+    }
+  }, [loadedObjects, token, selectedBucket, filters, timeWindow]);
+
+  // The load was capped iff the file(s) hold more entries than we retained.
+  const capped = Number.isFinite(MAX_ENTRIES) && loadedObjects.length > 0 && loadTotal > MAX_ENTRIES;
+  const isFilterActive =
+    filters.severity !== 'ALL' || filters.services.length > 0 || Boolean(filters.corrId) ||
+    filters.search.trim() !== '' || timeWindow !== null;
+
+  // When capped, any filter change re-scans the full cached file(s) (debounced)
+  // so filters apply across ALL entries, not just the retained slice. A fresh
+  // load primes skipScanRef so the immediate post-load change doesn't re-scan.
+  useEffect(() => {
+    if (!capped) return;
+    if (skipScanRef.current) { skipScanRef.current = false; return; }
+    const id = setTimeout(() => { scanFullFile(); }, 450);
+    return () => clearTimeout(id);
+  }, [filters, timeWindow, capped, scanFullFile]);
 
   // Load cache stats once on mount (and refresh after loads/clears).
   useEffect(() => { refreshCacheInfo(); }, [refreshCacheInfo]);
@@ -1068,10 +1160,34 @@ export function GcsExplorer() {
       </div>
 
       {/* ── Count bar ── */}
-      <div className="px-4 py-1 bg-slate-900/80 border-b border-slate-800 text-[11px] text-slate-500 shrink-0">
-        {allLogs.length > 0
-          ? `Showing ${filteredLogs.length.toLocaleString()} of ${allLogs.length.toLocaleString()} entries`
-          : 'No data loaded'}
+      <div className="flex items-center gap-2 px-4 py-1 bg-slate-900/80 border-b border-slate-800 text-[11px] text-slate-500 shrink-0">
+        <span>
+          {allLogs.length > 0 ? (
+            <>
+              Showing {filteredLogs.length.toLocaleString()} of {allLogs.length.toLocaleString()} entries
+              {truncated && (
+                <span className="text-amber-400/80"> · rendering first {RENDER_LIMIT.toLocaleString()}</span>
+              )}
+            </>
+          ) : 'No data loaded'}
+        </span>
+
+        {capped && (
+          <span className="ml-auto flex items-center gap-1.5 text-amber-300/90" title={`Filters search the whole file (${loadTotal.toLocaleString()} entries), not just the ${MAX_ENTRIES.toLocaleString()} kept in memory.`}>
+            {scanning ? (
+              <>
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+                Scanning full file…
+              </>
+            ) : isFilterActive ? (
+              <>matched {scanMatched.toLocaleString()} of {loadTotal.toLocaleString()} (full file)</>
+            ) : (
+              <>filters search the full file ({loadTotal.toLocaleString()})</>
+            )}
+          </span>
+        )}
       </div>
 
       {/* ── Log list ── */}
@@ -1119,9 +1235,17 @@ export function GcsExplorer() {
             No logs match the current filters.
           </div>
         ) : (
-          filteredLogs.map((log) => (
-            <LogRow key={log.id} log={log} onFilterCorrId={filterByCorrId} />
-          ))
+          <>
+            {visibleLogs.map((log) => (
+              <LogRow key={log.id} log={log} onFilterCorrId={filterByCorrId} />
+            ))}
+            {truncated && (
+              <div className="px-4 py-3 text-center text-[11px] text-slate-500 border-t border-slate-800">
+                {(filteredLogs.length - RENDER_LIMIT).toLocaleString()} more entries hidden — refine the
+                search, severity, service, or time-range filters to narrow the results.
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>

@@ -115,20 +115,65 @@ function parseGcsEntry(entry: GcsLogEntry, id: number): LogEntry {
   };
 }
 
-/** Parse a newline-delimited JSON GCS export into sorted LogEntry rows. */
-export function parseGcsNdjson(text: string, startId = 0): LogEntry[] {
+export interface ParseResult {
+  entries: LogEntry[];
+  total: number;      // total non-empty lines seen in the input
+  matched: number;    // lines passing `match` (== total when no matcher)
+  truncated: boolean; // true when more matched than were retained
+}
+
+export interface ParseOptions {
+  limit?: number;                          // max entries to retain (default unlimited)
+  startId?: number;                        // starting id for retained entries
+  match?: (entry: LogEntry) => boolean;    // keep only entries passing this predicate
+}
+
+/**
+ * Parse newline-delimited JSON without allocating a full lines array, retaining
+ * at most `limit` entries that pass `match` (the rest are only counted). This
+ * bounds memory on huge files: when no matcher is set and we've hit the limit,
+ * remaining lines are just counted (not parsed). With a matcher we must parse
+ * every line to test it, but still retain only matches up to `limit`.
+ */
+export function parseGcsNdjson(text: string, opts: ParseOptions = {}): ParseResult {
+  const limit = opts.limit && opts.limit > 0 ? opts.limit : Infinity;
+  const match = opts.match;
+  let id = opts.startId ?? 0;
   const entries: LogEntry[] = [];
-  let id = startId;
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const entry = JSON.parse(trimmed) as GcsLogEntry;
-      entries.push(parseGcsEntry(entry, id++));
-    } catch {
-      // tolerate a stray non-JSON line by surfacing it as a raw debug row
-      entries.push(parseGcsEntry({ textPayload: trimmed, severity: 'DEBUG' }, id++));
+  let total = 0;
+  let matched = 0;
+  let pos = 0;
+  const len = text.length;
+
+  while (pos < len) {
+    let nl = text.indexOf('\n', pos);
+    if (nl === -1) nl = len;
+    // trim whitespace within [pos, nl) without allocating
+    let start = pos, end = nl;
+    while (start < end && text.charCodeAt(start) <= 32) start++;
+    while (end > start && text.charCodeAt(end - 1) <= 32) end--;
+    if (end > start) {
+      total++;
+      // Fast path: no matcher and already full → just count, skip parsing.
+      if (match || entries.length < limit) {
+        const line = text.slice(start, end);
+        let entry: LogEntry;
+        try {
+          entry = parseGcsEntry(JSON.parse(line) as GcsLogEntry, id++);
+        } catch {
+          entry = parseGcsEntry({ textPayload: line, severity: 'DEBUG' }, id++);
+        }
+        if (!match || match(entry)) {
+          matched++;
+          if (entries.length < limit) entries.push(entry);
+        }
+      }
     }
+    pos = nl + 1;
   }
-  return entries.sort((a, b) => a.payloadTs - b.payloadTs);
+
+  entries.sort((a, b) => a.payloadTs - b.payloadTs);
+  // Without a matcher, every line "matches"; the fast path skips counting them.
+  const effMatched = match ? matched : total;
+  return { entries, total, matched: effMatched, truncated: effMatched > entries.length };
 }

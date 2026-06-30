@@ -39,6 +39,19 @@ export const MAX_OBJECT_LABEL = Number.isFinite(MAX_OBJECT_BYTES)
   ? `${Math.round(MAX_OBJECT_BYTES / 1024 / 1024)} MB`
   : 'unlimited';
 
+// Max number of parsed log entries to keep in memory across a load. Configurable
+// via NEXT_PUBLIC_GCS_MAX_ENTRIES; default 100k. Set 0 to keep all (uses more
+// memory). The render cap and filters further narrow what you see.
+function parseMaxEntries(): number {
+  const raw = process.env.NEXT_PUBLIC_GCS_MAX_ENTRIES;
+  if (raw === undefined || raw.trim() === '') return 100_000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return Number.POSITIVE_INFINITY; // unlimited
+  return Math.floor(n);
+}
+
+export const MAX_ENTRIES = parseMaxEntries();
+
 export interface GcsObject {
   name: string;
   size: number;
