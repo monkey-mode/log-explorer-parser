@@ -21,8 +21,23 @@ export const DEFAULT_PROJECT = process.env.NEXT_PUBLIC_GCS_PROJECT || '';
 
 export const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 
-// Refuse to download a single object larger than this into the browser (50 MB).
-export const MAX_OBJECT_BYTES = 50 * 1024 * 1024;
+// Max single-object download size. Configurable via NEXT_PUBLIC_GCS_MAX_FILE_MB
+// (in MB); default 50. Set it to 0 (or a non-positive/invalid value) to disable
+// the limit entirely. Larger files use more browser memory.
+function parseMaxBytes(): number {
+  const raw = process.env.NEXT_PUBLIC_GCS_MAX_FILE_MB;
+  if (raw === undefined || raw.trim() === '') return 50 * 1024 * 1024;
+  const mb = Number(raw);
+  if (!Number.isFinite(mb) || mb <= 0) return Number.POSITIVE_INFINITY; // unlimited
+  return mb * 1024 * 1024;
+}
+
+export const MAX_OBJECT_BYTES = parseMaxBytes();
+
+/** Human label for the size cap, e.g. "50 MB" or "unlimited". */
+export const MAX_OBJECT_LABEL = Number.isFinite(MAX_OBJECT_BYTES)
+  ? `${Math.round(MAX_OBJECT_BYTES / 1024 / 1024)} MB`
+  : 'unlimited';
 
 export interface GcsObject {
   name: string;
@@ -216,8 +231,7 @@ export async function downloadObject(
   }
   if (size > MAX_OBJECT_BYTES) {
     throw new Error(
-      `"${name}" is ${(size / 1024 / 1024).toFixed(1)} MB, over the ` +
-        `${MAX_OBJECT_BYTES / 1024 / 1024} MB limit.`
+      `"${name}" is ${(size / 1024 / 1024).toFixed(1)} MB, over the ${MAX_OBJECT_LABEL} limit.`
     );
   }
 

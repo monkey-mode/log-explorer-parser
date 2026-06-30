@@ -72,7 +72,7 @@ Open [`/gcs`](http://localhost:3000/gcs), click **Sign in with Google**, choose 
 > - The token requests the `devstorage.read_only` and `cloud-platform.read-only` scopes (the latter is needed to list your projects). Access to any project/bucket/object is still enforced by your own IAM.
 > - Your sign-in token is kept in `sessionStorage` so a page refresh keeps you signed in; it clears when you close the tab and expires after ~1 hour (then sign in again). Nothing is stored server-side.
 > - Only buckets whose name ends with `k8s_container_logs` are shown in the bucket picker.
-> - Files over 50 MB are skipped on load to keep the browser responsive.
+> - Files over the size cap (default 50 MB, set via `NEXT_PUBLIC_GCS_MAX_FILE_MB`; use `0` to disable) are skipped on load to keep the browser responsive.
 > - Downloads show per-file and overall progress, and each loaded object is cached locally in **IndexedDB** (keyed by bucket + object + generation) so reloading it is instant and offline. Use **Clear cache** in the file bar to purge it; nothing is written to your filesystem.
 > - Sink files are written in hourly batches, so the most recent entries may lag by up to an hour — this is browse/near-real-time, not a true live tail.
 
